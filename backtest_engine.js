@@ -1,6 +1,7 @@
 // ============================================================
 // backtest_engine.js – Motor completo de backtest, UI e robô
 // VERSÃO SCALP 5M/1H (ATR/ADX=10, parâmetros ajustados)
+// CORREÇÕES: adxValNow definido, getParam com fallback
 // ============================================================
 
 // ===== VARIÁVEIS GLOBAIS =====
@@ -192,13 +193,6 @@ const detectHTFStructure = (candles1H, bullishVelas = 2, bearishVelas = 2) => {
     return { bias, lastSwingHigh: Math.max(...candles1H.map(c => c.high)), lastSwingLow: Math.min(...candles1H.map(c => c.low)) };
 };
 
-// Filtro de mercado lateral combinado (ADX + Bandwidth)
-const checkLateralMarket = (adxValue, currentBW, avgBW) => {
-    const bwPass = currentBW >= avgBW * 0.25;
-    const rangePass = (adxValue >= 15) || (currentBW >= avgBW * 0.35);
-    return !(bwPass && rangePass); // retorna true se for lateral (bloqueia)
-};
-
 const checkDerivativesFilter = (fundingRate, oiDelta) => {
     if (fundingRate > 0.0020) return { allow: false, reason: 'Funding extremamente positivo (>0.2%)' };
     if (fundingRate < -0.0020) return { allow: false, reason: 'Funding extremamente negativo (<-0.2%)' };
@@ -241,17 +235,14 @@ const computeScore = (symbol, assetsData, liqMap, adxThreshold) => {
     if (rsi > 75) score -= 15;
     if (rsi < 25) score += 15;
     let clamped = Math.max(0, Math.min(100, score));
-    const isLateral = adxValue < adxThreshold; // simplificado, o filtro lateral é aplicado separadamente
-    let blockReason = null;
-    if (isLateral) {
+    if (adxValue < adxThreshold) {
         clamped = Math.max(40, Math.min(60, clamped));
-        blockReason = 'Lateralização detectada';
     }
     return {
         score: clamped,
         direction: clamped >= 60 ? 'LONG' : clamped <= 40 ? 'SHORT' : 'NEUTRAL',
         components: { mtf: mtfScore > 0 ? 'ALINHADO' : 'NEUTRO', smc: 'NEUTRO', mom: adxValue > adxThreshold ? 'FORTE' : 'FRACO', of: 'NEUTRO', macro: 'NEUTRO', oi: data.oiDelta > 0 ? 'CRESCENDO' : 'DIMINUINDO' },
-        blockReason
+        blockReason: adxValue < adxThreshold ? 'ADX baixo' : null
     };
 };
 
@@ -794,6 +785,10 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             continue;
         }
 
+        // ===== DEFINIÇÃO DE adxValNow (CORREÇÃO) =====
+        const adxValNow = typeof state.adx === 'object' ? state.adx.adx : state.adx;
+        // ================================================
+
         // ----- FILTROS -----
 
         // 1. Bandwidth + Mercado Lateral
@@ -807,9 +802,8 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             if (state.bandwidthHistory.length > 50) state.bandwidthHistory.shift();
             if (state.bandwidthHistory.length >= 10) {
                 const avgBW = state.bandwidthHistory.slice(-10).reduce((a,b) => a+b, 0) / 10;
-                const adxVal = typeof state.adx === 'object' ? state.adx.adx : state.adx;
                 // Filtro lateral: bloqueia se bandwidth < 25% da média E (ADX < 15 E bandwidth < 35% da média)
-                if (bandwidth < avgBW * 0.25 || (adxVal < 15 && bandwidth < avgBW * 0.35)) {
+                if (bandwidth < avgBW * 0.25 || (adxValNow < 15 && bandwidth < avgBW * 0.35)) {
                     blockStats['mercado_lateral'] = (blockStats['mercado_lateral'] || 0) + 1;
                     continue;
                 }
@@ -1563,17 +1557,14 @@ function generateReport(trades, summary, symbol, days, params) {
 // ============================================================
 // UI – EVENT LISTENERS (ajustado para os novos IDs)
 // ============================================================
-// ===== FUNÇÃO GETPARAM CORRIGIDA =====
+// ===== FUNÇÃO GETPARAM CORRIGIDA (com fallback) =====
 const getParam = (id) => {
     const el = document.getElementById(id);
     if (!el) {
-        console.warn(`⚠️ Elemento com id "${id}" não encontrado. Usando valor padrão.`);
-        // Retorna 0 para números, false para checkbox (mas aqui não sabemos o tipo, então 0)
+        console.warn(`⚠️ Elemento com id "${id}" não encontrado. Usando valor padrão 0.`);
         return 0;
     }
-    if (el.type === 'checkbox') {
-        return el.checked;
-    }
+    if (el.type === 'checkbox') return el.checked;
     const val = parseFloat(el.value);
     return isNaN(val) ? 0 : val;
 };
@@ -2571,7 +2562,7 @@ async function loadParamsFromCloud() {
 
 // Inicialização: carrega parâmetros da nuvem e configura eventos de salvamento
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadParamsFromCloud();;
+    await loadParamsFromCloud();
     document.querySelectorAll('.params-grid input, .params-grid select').forEach(el => {
         el.addEventListener('change', syncParamsToCloud);
         el.addEventListener('input', syncParamsToCloud);
