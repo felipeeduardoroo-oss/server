@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Backtest Engine — SMC + MTF (v3.8.0) com 3 Candles Live</title>
+    <title>Backtest Engine — Scalp 5M + SMC (v4.0)</title>
     <!-- Bibliotecas -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -60,51 +60,14 @@
         .robot-log .signal { color:#00e896; }
         .robot-log .error { color:#ff4d6d; }
 
-        /* ===== NOVOS ESTILOS PARA OS 3 GRÁFICOS ===== */
         .section-title { font-size:1.4rem; margin:30px 0 15px; border-left:4px solid #7c3aed; padding-left:15px; color:#e6e8eb; }
-        .candles-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin: 20px 0;
-        }
-        .candle-box {
-            background:#0f1117;
-            border:1px solid #2a2a44;
-            border-radius:12px;
-            padding:12px;
-        }
-        .candle-box .title {
-            font-size:0.9rem;
-            font-weight:600;
-            color:#8b949e;
-            margin-bottom:6px;
-            text-align:center;
-        }
-        .candle-box .chart-container {
-            width:100%;
-            height:280px;
-        }
-        .controls-row {
-            display:flex;
-            flex-wrap:wrap;
-            gap:12px;
-            align-items:center;
-            margin-bottom:16px;
-            background:#0f1117;
-            padding:10px 16px;
-            border-radius:10px;
-            border:1px solid #2a2a44;
-        }
+        .candles-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:20px 0; }
+        .candle-box { background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:12px; }
+        .candle-box .title { font-size:0.9rem; font-weight:600; color:#8b949e; margin-bottom:6px; text-align:center; }
+        .candle-box .chart-container { width:100%; height:280px; }
+        .controls-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:16px; background:#0f1117; padding:10px 16px; border-radius:10px; border:1px solid #2a2a44; }
         .controls-row label { color:#8b949e; font-size:0.85rem; }
-        .controls-row select, .controls-row button {
-            background:#1a1a2e;
-            color:#e6e8eb;
-            border:1px solid #2a2a44;
-            padding:6px 12px;
-            border-radius:6px;
-            font-size:.9rem;
-        }
+        .controls-row select, .controls-row button { background:#1a1a2e; color:#e6e8eb; border:1px solid #2a2a44; padding:6px 12px; border-radius:6px; font-size:.9rem; }
         .controls-row button { cursor:pointer; background:#2a2a44; }
         .controls-row button:hover { background:#3a3a5a; }
         .controls-row .status { color:#6b7280; font-size:.8rem; margin-left:auto; }
@@ -117,20 +80,13 @@
         .onchain-card .change.positive { color:#00e896; }
         .onchain-card .change.negative { color:#ff4d6d; }
 
-        @media (max-width: 1024px) {
-            .candles-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        @media (max-width: 768px) {
-            .candles-grid { grid-template-columns: 1fr; }
-            .params-grid{grid-template-columns:1fr 1fr;}
-            .stats-grid{grid-template-columns:1fr 1fr;}
-            .onchain-grid{grid-template-columns:1fr 1fr;}
-        }
+        @media (max-width: 1024px) { .candles-grid { grid-template-columns:repeat(2,1fr); } }
+        @media (max-width: 768px) { .candles-grid { grid-template-columns:1fr; } .params-grid{grid-template-columns:1fr 1fr;} .stats-grid{grid-template-columns:1fr 1fr;} .onchain-grid{grid-template-columns:1fr 1fr;} }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>🧪 Backtest Engine — SMC + MTF (v3.8.0) com 3 Candles Live</h1>
+    <h1>🧪 Backtest Engine — Scalp 5M + SMC (v4.0)</h1>
 
     <!-- Barra de ações -->
     <div class="io-section">
@@ -153,13 +109,13 @@
     </div>
     <div class="robot-log" id="robotLog"><div style="color:#6b7280;">Aguardando sinais...</div></div>
 
-    <!-- Parâmetros -->
+    <!-- Parâmetros (valores padrão ajustados para Scalp) -->
     <div class="params-grid">
-        <div><label>Score mínimo LONG</label><input type="number" id="scoreMin" value="68" min="0" max="100" step="1"></div>
-        <div><label>Score máximo SHORT</label><input type="number" id="scoreMaxShort" value="32" min="0" max="100" step="1"></div>
-        <div><label>ADX mínimo (base)</label><input type="number" id="adxMin" value="22" min="0" max="100" step="1"></div>
-        <div><label>R:R mínimo</label><input type="number" id="rrMin" value="1.8" min="0.1" max="10" step="0.1"></div>
-        <div><label>Retest dist (ATR)</label><input type="number" id="retestDist" value="2.0" min="0.1" max="10" step="0.1"></div>
+        <div><label>Score mínimo LONG</label><input type="number" id="scoreMin" value="51" min="0" max="100" step="1"></div>
+        <div><label>Score máximo SHORT</label><input type="number" id="scoreMaxShort" value="49" min="0" max="100" step="1"></div>
+        <div><label>ADX mínimo (base)</label><input type="number" id="adxMin" value="12" min="0" max="100" step="1"></div>
+        <div><label>R:R mínimo</label><input type="number" id="rrMin" value="1.0" min="0.1" max="10" step="0.1"></div>
+        <div><label>Retest dist (ATR)</label><input type="number" id="retestDist" value="2.5" min="0.1" max="10" step="0.1"></div>
         <div><label>Dias de backtest (máx 1000)</label><input type="number" id="days" value="999" min="1" max="1000" step="1"></div>
         <div><label>Tempo máx. aberto (h)</label><input type="number" id="maxHoldHours" value="72" min="1" max="500" step="1"></div>
         <div><label>Ativo</label>
@@ -173,24 +129,24 @@
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireBOS" checked> BOS</label>
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireRetest" checked> Retest</label>
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireMTF" checked> MTF</label>
-            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="emaRetest"> EMA Retest</label>
-            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireSweep"> Liquidity Sweep</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="emaRetest" checked> EMA Retest</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireSweep" checked> Liquidity Sweep</label>
         </div>
-        <div><label>HTF Bullish Velas</label><input type="number" id="htfBullishVelas" value="3" min="1" max="20" step="1"></div>
+        <div><label>HTF Bullish Velas</label><input type="number" id="htfBullishVelas" value="2" min="1" max="20" step="1"></div>
         <div><label>DI diff min LONG</label><input type="number" id="diDiffMinLong" value="0" min="0" max="20" step="1"></div>
-        <div><label>MVRV drop % max SHORT</label><input type="number" id="mvrvDropPercent" value="15" min="1" max="100" step="1">%</div>
-        <div><label>HTF Bearish Velas</label><input type="number" id="htfBearishVelas" value="6" min="1" max="20" step="1"></div>
-        <div><label>DI diff min SHORT</label><input type="number" id="diDiffMinShort" value="5" min="0" max="20" step="1"></div>
-        <div><label>Stop LONG (ATR)</label><input type="number" id="stopLong" value="1.5" min="0.5" max="5" step="0.1"></div>
-        <div><label>Stop SHORT (ATR)</label><input type="number" id="stopShort" value="2.0" min="0.5" max="5" step="0.1"></div>
-        <div><label>TP1 LONG (ATR)</label><input type="number" id="tp1Long" value="2.0" min="0.5" max="10" step="0.1"></div>
+        <div><label>MVRV drop % max SHORT</label><input type="number" id="mvrvDropPercent" value="25" min="1" max="100" step="1">%</div>
+        <div><label>HTF Bearish Velas</label><input type="number" id="htfBearishVelas" value="2" min="1" max="20" step="1"></div>
+        <div><label>DI diff min SHORT</label><input type="number" id="diDiffMinShort" value="8" min="0" max="20" step="1"></div>
+        <div><label>Stop LONG (ATR)</label><input type="number" id="stopLong" value="0.8" min="0.5" max="5" step="0.1"></div>
+        <div><label>Stop SHORT (ATR)</label><input type="number" id="stopShort" value="0.8" min="0.5" max="5" step="0.1"></div>
+        <div><label>TP1 LONG (ATR)</label><input type="number" id="tp1Long" value="1.5" min="0.5" max="10" step="0.1"></div>
         <div><label>TP1 SHORT (ATR)</label><input type="number" id="tp1Short" value="1.5" min="0.5" max="10" step="0.1"></div>
-        <div><label>TP2 (ATR)</label><input type="number" id="tp2Dist" value="4.0" min="1.0" max="15" step="0.1"></div>
-        <div><label>Trailing LONG (ATR)</label><input type="number" id="trailLong" value="1.2" min="0.5" max="5" step="0.1"></div>
-        <div><label>Trailing SHORT (ATR)</label><input type="number" id="trailShort" value="1.5" min="0.5" max="5" step="0.1"></div>
-        <div><label>TP1 % (fechar)</label><input type="number" id="tp1Pct" value="40" min="5" max="90" step="5"></div>
-        <div><label>TP2 % (fechar)</label><input type="number" id="tp2Pct" value="40" min="5" max="90" step="5"></div>
-        <div><label>Runner % (manter)</label><input type="number" id="runnerPct" value="20" min="5" max="90" step="5"></div>
+        <div><label>TP2 (ATR)</label><input type="number" id="tp2Dist" value="2.5" min="1.0" max="15" step="0.1"></div>
+        <div><label>Trailing LONG (ATR)</label><input type="number" id="trailLong" value="0.5" min="0.5" max="5" step="0.1"></div>
+        <div><label>Trailing SHORT (ATR)</label><input type="number" id="trailShort" value="0.5" min="0.5" max="5" step="0.1"></div>
+        <div><label>TP1 % (fechar)</label><input type="number" id="tp1Pct" value="70" min="5" max="90" step="5"></div>
+        <div><label>TP2 % (fechar)</label><input type="number" id="tp2Pct" value="0" min="0" max="90" step="5"></div>
+        <div><label>Runner % (manter)</label><input type="number" id="runnerPct" value="30" min="5" max="90" step="5"></div>
         <div style="grid-column:1/-1;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
             <button class="btn-run" id="runBtn">▶️ Executar Backtest</button>
             <span id="status" class="status-bar">Aguardando execução...</span>
@@ -211,11 +167,12 @@
     <!-- Gráfico de equity -->
     <div class="chart-wrapper"><canvas id="equityChart"></canvas></div>
 
-    <!-- ===== 3 GRÁFICOS DE CANDLESTICK EM TEMPO REAL ===== -->
+    <!-- 3 gráficos de candlestick em tempo real -->
     <div class="section-title">📊 Gráficos de Candlestick em Tempo Real (BTC, ETH, SOL)</div>
     <div class="controls-row">
         <label>Timeframe:
             <select id="multiTimeframe">
+                <option value="5m">5 min</option>
                 <option value="15m">15 min</option>
                 <option value="1h" selected>1 hora</option>
                 <option value="4h">4 horas</option>
@@ -226,40 +183,33 @@
         <span class="status" id="multiStatus">⏳ Carregando...</span>
     </div>
     <div class="candles-grid" id="candlesGrid">
-        <div class="candle-box">
-            <div class="title">BTCUSDT</div>
-            <div class="chart-container" id="chartBTC"></div>
-        </div>
-        <div class="candle-box">
-            <div class="title">ETHUSDT</div>
-            <div class="chart-container" id="chartETH"></div>
-        </div>
-        <div class="candle-box">
-            <div class="title">SOLUSDT</div>
-            <div class="chart-container" id="chartSOL"></div>
-        </div>
+        <div class="candle-box"><div class="title">BTCUSDT</div><div class="chart-container" id="chartBTC"></div></div>
+        <div class="candle-box"><div class="title">ETHUSDT</div><div class="chart-container" id="chartETH"></div></div>
+        <div class="candle-box"><div class="title">SOLUSDT</div><div class="chart-container" id="chartSOL"></div></div>
     </div>
-<!-- ===== HISTÓRICO DE SINAIS (ARMazenados em NUVEM) ===== -->
-<div class="section-title">📜 Histórico de Sinais (Últimos 20)</div>
-<div style="background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:12px; margin:15px 0; max-height:300px; overflow-y:auto;">
-    <table style="width:100%; font-size:0.8rem;">
-        <thead>
-            <tr>
-                <th style="color:#6b7280; text-align:left;">Data</th>
-                <th style="color:#6b7280; text-align:left;">Ativo</th>
-                <th style="color:#6b7280; text-align:left;">Dir</th>
-                <th style="color:#6b7280; text-align:left;">Preço</th>
-                <th style="color:#6b7280; text-align:left;">Score</th>
-                <th style="color:#6b7280; text-align:left;">R:R</th>
-                <th style="color:#6b7280; text-align:left;">Fonte</th>
-            </tr>
-        </thead>
-        <tbody id="signalHistoryBody">
-            <tr><td colspan="7" style="text-align:center;color:#6b7280;">Carregando histórico...</td></tr>
-        </tbody>
-    </table>
-</div>
-    <!-- ===== ANÁLISE ON-CHAIN & DERIVADOS ===== -->
+
+    <!-- Histórico de sinais -->
+    <div class="section-title">📜 Histórico de Sinais (Últimos 20)</div>
+    <div style="background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:12px; margin:15px 0; max-height:300px; overflow-y:auto;">
+        <table style="width:100%; font-size:0.8rem;">
+            <thead>
+                <tr>
+                    <th style="color:#6b7280; text-align:left;">Data</th>
+                    <th style="color:#6b7280; text-align:left;">Ativo</th>
+                    <th style="color:#6b7280; text-align:left;">Dir</th>
+                    <th style="color:#6b7280; text-align:left;">Preço</th>
+                    <th style="color:#6b7280; text-align:left;">Score</th>
+                    <th style="color:#6b7280; text-align:left;">R:R</th>
+                    <th style="color:#6b7280; text-align:left;">Fonte</th>
+                </tr>
+            </thead>
+            <tbody id="signalHistoryBody">
+                <tr><td colspan="7" style="text-align:center;color:#6b7280;">Carregando histórico...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Análise On-Chain & Derivados -->
     <div class="section-title">🔍 Análise On-Chain & Derivados</div>
     <div class="onchain-grid" id="onchainGrid">
         <div class="onchain-card"><div class="label">MVRV</div><div class="value" id="oc-mvrv">--</div><div class="sub" id="oc-mvrv-sub">--</div></div>
@@ -283,18 +233,18 @@
 
     <div class="legend">
         <strong>Legenda:</strong> Dados: Preços (Binance), Funding Rate (Binance), OI (Binance), MVRV (CoinMetrics).<br>
-        <strong>v3.8.0:</strong> Adicionados 3 gráficos de candlestick em tempo real (BTC, ETH, SOL) com atualização a cada 30s.
+        <strong>v4.0 (Scalp):</strong> Timeframe principal 5min, HTF 1h, períodos ATR/ADX = 10, parâmetros ajustados para scalping.
     </div>
-    <!-- ===== RODAPÉ COM TESTE DO TELEGRAM ===== -->
-<div style="margin-top:30px; padding-top:20px; border-top:1px solid #2a2a44; display:flex; flex-wrap:wrap; align-items:center; gap:16px;">
-    <div style="display:flex; align-items:center; gap:10px;">
-        <span style="color:#8b949e; font-size:0.9rem;">📡 Telegram:</span>
-        <span id="telegramTestLed" style="display:inline-block; width:14px; height:14px; border-radius:50%; background:#6b7280;"></span>
-        <span id="telegramTestStatus" style="color:#8b949e; font-size:0.85rem;">Não testado</span>
+    <!-- Rodapé com teste do Telegram -->
+    <div style="margin-top:30px; padding-top:20px; border-top:1px solid #2a2a44; display:flex; flex-wrap:wrap; align-items:center; gap:16px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span style="color:#8b949e; font-size:0.9rem;">📡 Telegram:</span>
+            <span id="telegramTestLed" style="display:inline-block; width:14px; height:14px; border-radius:50%; background:#6b7280;"></span>
+            <span id="telegramTestStatus" style="color:#8b949e; font-size:0.85rem;">Não testado</span>
+        </div>
+        <button id="telegramTestBtn" class="btn-io primary" style="background:#7c3aed; border-color:#7c3aed;">📨 Enviar mensagem de teste</button>
+        <span id="telegramTestLog" style="color:#6b7280; font-size:0.8rem; flex:1; min-width:150px;">Clique no botão para testar</span>
     </div>
-    <button id="telegramTestBtn" class="btn-io primary" style="background:#7c3aed; border-color:#7c3aed;">📨 Enviar mensagem de teste</button>
-    <span id="telegramTestLog" style="color:#6b7280; font-size:0.8rem; flex:1; min-width:150px;">Clique no botão para testar</span>
-</div>
 </div>
 
 <script type="importmap">
@@ -330,7 +280,7 @@
         });
     });
 
-    console.log('✅ Backtest Engine v3.8.0 – todos os módulos carregados.');
+    console.log('✅ Backtest Engine v4.0 (Scalp) – todos os módulos carregados.');
 </script>
 </body>
 </html>
