@@ -1,34 +1,286 @@
-// index.js
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Backtest Engine — Scalp 5M + SMC (v4.0)</title>
+    <!-- Bibliotecas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        /* ===== ESTILOS (todos os estilos, para não depender de externos) ===== */
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:'Segoe UI',system-ui,sans-serif; background:#08090d; color:#e6e8eb; padding:20px; min-height:100vh; }
+        .container { max-width:1400px; margin:0 auto; }
+        h1 { font-size:1.8rem; margin-bottom:20px; background:linear-gradient(90deg,#00b4d8,#7c3aed); -webkit-background-clip:text; -webkit-text-fill-color:transparent; display:inline-block; }
+        .params-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:20px; margin-bottom:24px; }
+        .params-grid label { font-size:0.8rem; color:#8b949e; display:block; }
+        .params-grid input[type="number"] { width:100%; padding:6px 8px; border-radius:6px; border:1px solid #2a2a44; background:#1a1a2e; color:#e6e8eb; font-family:'JetBrains Mono',monospace; font-size:0.9rem; }
+        .params-grid input[type="checkbox"] { accent-color:#6c6cff; width:18px; height:18px; margin-right:6px; }
+        .params-grid .checkbox-group { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px; }
+        .btn-run { background:#7c3aed; color:#fff; border:none; padding:12px 32px; border-radius:8px; font-weight:600; font-size:1rem; cursor:pointer; transition:all .2s; box-shadow:0 4px 15px rgba(124,58,237,.3); margin-top:8px; }
+        .btn-run:hover { transform:translateY(-2px); box-shadow:0 8px 25px rgba(124,58,237,.5); }
+        .btn-run:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+        .btn-io { background:#2a2a44; color:#e6e8eb; border:1px solid #444; padding:8px 20px; border-radius:8px; font-weight:500; font-size:0.9rem; cursor:pointer; margin:4px; }
+        .btn-io:hover { background:#3a3a5a; }
+        .btn-io.primary { background:#7c3aed; border-color:#7c3aed; }
+        .btn-io.primary:hover { background:#6a2ad0; }
+        .btn-io.success { background:#00b894; border-color:#00b894; }
+        .btn-io.success:hover { background:#00a381; }
+        .btn-io.live { background:#e17055; border-color:#e17055; color:#fff; }
+        .btn-io.live.active { background:#00b894; border-color:#00b894; }
+        .btn-io.robot { background:#f39c12; border-color:#f39c12; color:#fff; }
+        .btn-io.robot.active { background:#e74c3c; border-color:#e74c3c; }
+        .status-bar { margin:12px 0 16px; font-size:.9rem; color:#8b949e; min-height:1.5em; }
+        .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:16px 0 24px; }
+        .stat-card { background:#0f1117; border:1px solid #2a2a44; border-radius:10px; padding:16px; text-align:center; }
+        .stat-card .label { font-size:.7rem; text-transform:uppercase; color:#6b7280; letter-spacing:.5px; }
+        .stat-card .value { font-size:1.6rem; font-weight:700; font-family:'JetBrains Mono',monospace; margin-top:4px; }
+        .stat-card .value.positive { color:#00e896; }
+        .stat-card .value.negative { color:#ff4d6d; }
+        .table-wrapper { overflow-x:auto; background:#0f1117; border:1px solid #2a2a44; border-radius:12px; margin:16px 0 24px; }
+        table { width:100%; border-collapse:collapse; font-size:.85rem; }
+        th { text-align:left; padding:12px 16px; color:#6b7280; text-transform:uppercase; font-size:.7rem; letter-spacing:.5px; border-bottom:1px solid #2a2a44; }
+        td { padding:10px 16px; border-bottom:1px solid #1a1a2e; font-family:'JetBrains Mono',monospace; }
+        tbody tr:hover { background:rgba(255,255,255,.02); }
+        .positive { color:#00e896; }
+        .negative { color:#ff4d6d; }
+        .chart-wrapper { background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:20px; margin:20px 0; height:320px; }
+        .diagnostic { background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:16px; margin:16px 0; }
+        .diagnostic .tag { display:inline-block; padding:4px 12px; border-radius:6px; font-size:.75rem; margin:4px 6px 4px 0; background:#1a1a2e; border:1px solid #2a2a44; }
+        .diagnostic .tag.pass { background:rgba(0,232,150,.15); color:#00e896; border-color:#00e896; }
+        .diagnostic .tag.block { background:rgba(255,77,109,.15); color:#ff4d6d; border-color:#ff4d6d; }
+        .legend { font-size:.75rem; color:#6b7280; margin-top:8px; padding:12px; background:#0f1117; border-radius:8px; border:1px solid #2a2a44; }
+        .io-section { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:8px 0 12px; }
+        .robot-status { display:flex; align-items:center; gap:12px; margin:8px 0; padding:8px 16px; background:#0f1117; border-radius:8px; border:1px solid #2a2a44; }
+        .robot-status .led { width:12px; height:12px; border-radius:50%; display:inline-block; }
+        .robot-status .led.on { background:#00e896; box-shadow:0 0 10px #00e896; }
+        .robot-status .led.off { background:#ff4d6d; box-shadow:0 0 10px #ff4d6d; }
+        .robot-log { max-height:150px; overflow-y:auto; background:#0f1117; border:1px solid #2a2a44; border-radius:8px; padding:8px 12px; margin:8px 0; font-size:.8rem; color:#8b949e; }
+        .robot-log .signal { color:#00e896; }
+        .robot-log .error { color:#ff4d6d; }
 
-const app = express();
-const PORT = 3000;
+        .section-title { font-size:1.4rem; margin:30px 0 15px; border-left:4px solid #7c3aed; padding-left:15px; color:#e6e8eb; }
+        .candles-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:20px 0; }
+        .candle-box { background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:12px; }
+        .candle-box .title { font-size:0.9rem; font-weight:600; color:#8b949e; margin-bottom:6px; text-align:center; }
+        .candle-box .chart-container { width:100%; height:280px; }
+        .controls-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:16px; background:#0f1117; padding:10px 16px; border-radius:10px; border:1px solid #2a2a44; }
+        .controls-row label { color:#8b949e; font-size:0.85rem; }
+        .controls-row select, .controls-row button { background:#1a1a2e; color:#e6e8eb; border:1px solid #2a2a44; padding:6px 12px; border-radius:6px; font-size:.9rem; }
+        .controls-row button { cursor:pointer; background:#2a2a44; }
+        .controls-row button:hover { background:#3a3a5a; }
+        .controls-row .status { color:#6b7280; font-size:.8rem; margin-left:auto; }
 
-// Libera o acesso para qualquer front-end (resolve o problema de CORS)
-app.use(cors());
+        .onchain-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:15px 0; }
+        .onchain-card { background:#0f1117; border:1px solid #2a2a44; border-radius:10px; padding:14px; text-align:center; }
+        .onchain-card .label { font-size:.65rem; text-transform:uppercase; color:#6b7280; letter-spacing:.5px; }
+        .onchain-card .value { font-size:1.2rem; font-weight:600; font-family:'JetBrains Mono',monospace; margin-top:2px; }
+        .onchain-card .sub { font-size:.75rem; color:#8b949e; margin-top:2px; }
+        .onchain-card .change.positive { color:#00e896; }
+        .onchain-card .change.negative { color:#ff4d6d; }
 
-// Rota que seu front-end vai chamar
-app.get('/api/assets', async (req, res) => {
-  try {
-    // Repassa todos os parâmetros (ex: ?limit=10&include=something)
-    const resposta = await axios.get('https://community-api.coinmetrics.io/v4/reference-data/assets', {
-      params: req.query
+        @media (max-width: 1024px) { .candles-grid { grid-template-columns:repeat(2,1fr); } }
+        @media (max-width: 768px) { .candles-grid { grid-template-columns:1fr; } .params-grid{grid-template-columns:1fr 1fr;} .stats-grid{grid-template-columns:1fr 1fr;} .onchain-grid{grid-template-columns:1fr 1fr;} }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🧪 Backtest Engine — Scalp 5M + SMC (v4.0)</h1>
+
+    <!-- Barra de ações -->
+    <div class="io-section">
+        <button class="btn-io" id="exportBtn">📤 Exportar cache</button>
+        <button class="btn-io primary" id="fetchExportBtn">📥 Buscar e Exportar (1000 dias)</button>
+        <button class="btn-io success" id="reportBtn">📊 Exportar Relatório</button>
+        <label class="btn-io" style="cursor:pointer;">📥 Importar dados
+            <input type="file" id="importInput" multiple accept=".json" style="display:none;" />
+        </label>
+        <span style="color:#6b7280;font-size:0.8rem;">(carregue arquivos JSON de cada indicador)</span>
+        <button class="btn-io live" id="liveModeBtn">🔴 Modo Live (15min)</button>
+        <button class="btn-io robot" id="robotToggleBtn">🤖 Iniciar Robô de Sinais</button>
+    </div>
+
+    <!-- Status do robô -->
+    <div class="robot-status">
+        <span class="led off" id="robotLed"></span>
+        <span id="robotStatusText">Robô parado</span>
+        <span style="margin-left:auto;font-size:.8rem;color:#6b7280;">Cooldown: <span id="robotCooldown">--</span></span>
+    </div>
+    <div class="robot-log" id="robotLog"><div style="color:#6b7280;">Aguardando sinais...</div></div>
+
+    <!-- Parâmetros (valores padrão ajustados para Scalp) -->
+    <div class="params-grid">
+        <div><label>Score mínimo LONG</label><input type="number" id="scoreMin" value="51" min="0" max="100" step="1"></div>
+        <div><label>Score máximo SHORT</label><input type="number" id="scoreMaxShort" value="49" min="0" max="100" step="1"></div>
+        <div><label>ADX mínimo (base)</label><input type="number" id="adxMin" value="12" min="0" max="100" step="1"></div>
+        <div><label>R:R mínimo</label><input type="number" id="rrMin" value="1.0" min="0.1" max="10" step="0.1"></div>
+        <div><label>Retest dist (ATR)</label><input type="number" id="retestDist" value="2.5" min="0.1" max="10" step="0.1"></div>
+        <div><label>Dias de backtest (máx 1000)</label><input type="number" id="days" value="999" min="1" max="1000" step="1"></div>
+        <div><label>Tempo máx. aberto (h)</label><input type="number" id="maxHoldHours" value="72" min="1" max="500" step="1"></div>
+        <div><label>Ativo</label>
+            <select id="symbolSelect" style="width:100%;padding:6px;border-radius:6px;border:1px solid #2a2a44;background:#1a1a2e;color:#e6e8eb;font-size:.9rem;">
+                <option value="BTCUSDT">BTCUSDT</option>
+                <option value="ETHUSDT">ETHUSDT</option>
+                <option value="SOLUSDT">SOLUSDT</option>
+            </select>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px;">
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireBOS" checked> BOS</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireRetest" checked> Retest</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireMTF" checked> MTF</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="emaRetest" checked> EMA Retest</label>
+            <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="requireSweep" checked> Liquidity Sweep</label>
+        </div>
+        <div><label>HTF Bullish Velas</label><input type="number" id="htfBullishVelas" value="2" min="1" max="20" step="1"></div>
+        <div><label>DI diff min LONG</label><input type="number" id="diDiffMinLong" value="0" min="0" max="20" step="1"></div>
+        <div><label>MVRV drop % max SHORT</label><input type="number" id="mvrvDropPercent" value="25" min="1" max="100" step="1">%</div>
+        <div><label>HTF Bearish Velas</label><input type="number" id="htfBearishVelas" value="2" min="1" max="20" step="1"></div>
+        <div><label>DI diff min SHORT</label><input type="number" id="diDiffMinShort" value="8" min="0" max="20" step="1"></div>
+        <div><label>Stop LONG (ATR)</label><input type="number" id="stopLong" value="0.8" min="0.5" max="5" step="0.1"></div>
+        <div><label>Stop SHORT (ATR)</label><input type="number" id="stopShort" value="0.8" min="0.5" max="5" step="0.1"></div>
+        <div><label>TP1 LONG (ATR)</label><input type="number" id="tp1Long" value="1.5" min="0.5" max="10" step="0.1"></div>
+        <div><label>TP1 SHORT (ATR)</label><input type="number" id="tp1Short" value="1.5" min="0.5" max="10" step="0.1"></div>
+        <div><label>TP2 (ATR)</label><input type="number" id="tp2Dist" value="2.5" min="1.0" max="15" step="0.1"></div>
+        <div><label>Trailing LONG (ATR)</label><input type="number" id="trailLong" value="0.5" min="0.5" max="5" step="0.1"></div>
+        <div><label>Trailing SHORT (ATR)</label><input type="number" id="trailShort" value="0.5" min="0.5" max="5" step="0.1"></div>
+        <div><label>TP1 % (fechar)</label><input type="number" id="tp1Pct" value="70" min="5" max="90" step="5"></div>
+        <div><label>TP2 % (fechar)</label><input type="number" id="tp2Pct" value="0" min="0" max="90" step="5"></div>
+        <div><label>Runner % (manter)</label><input type="number" id="runnerPct" value="30" min="5" max="90" step="5"></div>
+        <div style="grid-column:1/-1;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <button class="btn-run" id="runBtn">▶️ Executar Backtest</button>
+            <span id="status" class="status-bar">Aguardando execução...</span>
+        </div>
+    </div>
+
+    <!-- Estatísticas -->
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card"><div class="label">Total Trades</div><div class="value" id="st-trades">--</div></div>
+        <div class="stat-card"><div class="label">Winrate</div><div class="value" id="st-winrate">--</div></div>
+        <div class="stat-card"><div class="label">P&L %</div><div class="value" id="st-pnlpct">--</div></div>
+        <div class="stat-card"><div class="label">P&L (USD)</div><div class="value" id="st-pnlusd">--</div></div>
+        <div class="stat-card"><div class="label">Profit Factor</div><div class="value" id="st-pf">--</div></div>
+        <div class="stat-card"><div class="label">Drawdown</div><div class="value" id="st-dd">--</div></div>
+        <div class="stat-card"><div class="label">Retorno Anualizado</div><div class="value" id="st-ann">--</div></div>
+    </div>
+
+    <!-- Gráfico de equity -->
+    <div class="chart-wrapper"><canvas id="equityChart"></canvas></div>
+
+    <!-- 3 gráficos de candlestick em tempo real -->
+    <div class="section-title">📊 Gráficos de Candlestick em Tempo Real (BTC, ETH, SOL)</div>
+    <div class="controls-row">
+        <label>Timeframe:
+            <select id="multiTimeframe">
+                <option value="5m">5 min</option>
+                <option value="15m">15 min</option>
+                <option value="1h" selected>1 hora</option>
+                <option value="4h">4 horas</option>
+                <option value="1d">1 dia</option>
+            </select>
+        </label>
+        <button id="multiRefreshBtn">🔄 Atualizar todos</button>
+        <span class="status" id="multiStatus">⏳ Carregando...</span>
+    </div>
+    <div class="candles-grid" id="candlesGrid">
+        <div class="candle-box"><div class="title">BTCUSDT</div><div class="chart-container" id="chartBTC"></div></div>
+        <div class="candle-box"><div class="title">ETHUSDT</div><div class="chart-container" id="chartETH"></div></div>
+        <div class="candle-box"><div class="title">SOLUSDT</div><div class="chart-container" id="chartSOL"></div></div>
+    </div>
+
+    <!-- Histórico de sinais -->
+    <div class="section-title">📜 Histórico de Sinais (Últimos 20)</div>
+    <div style="background:#0f1117; border:1px solid #2a2a44; border-radius:12px; padding:12px; margin:15px 0; max-height:300px; overflow-y:auto;">
+        <table style="width:100%; font-size:0.8rem;">
+            <thead>
+                <tr>
+                    <th style="color:#6b7280; text-align:left;">Data</th>
+                    <th style="color:#6b7280; text-align:left;">Ativo</th>
+                    <th style="color:#6b7280; text-align:left;">Dir</th>
+                    <th style="color:#6b7280; text-align:left;">Preço</th>
+                    <th style="color:#6b7280; text-align:left;">Score</th>
+                    <th style="color:#6b7280; text-align:left;">R:R</th>
+                    <th style="color:#6b7280; text-align:left;">Fonte</th>
+                </tr>
+            </thead>
+            <tbody id="signalHistoryBody">
+                <tr><td colspan="7" style="text-align:center;color:#6b7280;">Carregando histórico...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Análise On-Chain & Derivados -->
+    <div class="section-title">🔍 Análise On-Chain & Derivados</div>
+    <div class="onchain-grid" id="onchainGrid">
+        <div class="onchain-card"><div class="label">MVRV</div><div class="value" id="oc-mvrv">--</div><div class="sub" id="oc-mvrv-sub">--</div></div>
+        <div class="onchain-card"><div class="label">Funding Rate</div><div class="value" id="oc-funding">--</div><div class="sub" id="oc-funding-sub">--</div></div>
+        <div class="onchain-card"><div class="label">Open Interest</div><div class="value" id="oc-oi">--</div><div class="sub" id="oc-oi-delta">--</div></div>
+        <div class="onchain-card"><div class="label">Basis (perp vs spot)</div><div class="value" id="oc-basis">--</div><div class="sub">--</div></div>
+        <div class="onchain-card"><div class="label">Put/Call Ratio</div><div class="value" id="oc-pcr">--</div><div class="sub">--</div></div>
+        <div class="onchain-card"><div class="label">Fear & Greed</div><div class="value" id="oc-fng">--</div><div class="sub" id="oc-fng-sub">--</div></div>
+        <div class="onchain-card"><div class="label">ETF Flows (BTC)</div><div class="value" id="oc-etf">--</div><div class="sub">Último dia</div></div>
+    </div>
+
+    <!-- Tabela de trades -->
+    <div class="table-wrapper">
+        <table><thead><tr><th>Entrada</th><th>Ativo</th><th>Dir</th><th>Preço Entrada</th><th>Stop</th><th>TP1</th><th>Saída</th><th>Motivo</th><th>P&L %</th><th>Duração (h)</th></tr></thead>
+            <tbody id="tradesBody"><tr><td colspan="10" style="text-align:center;color:#6b7280;">Nenhum backtest executado.</td></tr></tbody>
+        </table>
+    </div>
+
+    <!-- Diagnóstico -->
+    <div class="diagnostic" id="diagnostic" style="display:none;"><strong>🔍 Diagnóstico de bloqueios</strong><div id="blockStats"></div></div>
+
+    <div class="legend">
+        <strong>Legenda:</strong> Dados: Preços (Binance), Funding Rate (Binance), OI (Binance), MVRV (CoinMetrics).<br>
+        <strong>v4.0 (Scalp):</strong> Timeframe principal 5min, HTF 1h, períodos ATR/ADX = 10, parâmetros ajustados para scalping.
+    </div>
+    <!-- Rodapé com teste do Telegram -->
+    <div style="margin-top:30px; padding-top:20px; border-top:1px solid #2a2a44; display:flex; flex-wrap:wrap; align-items:center; gap:16px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span style="color:#8b949e; font-size:0.9rem;">📡 Telegram:</span>
+            <span id="telegramTestLed" style="display:inline-block; width:14px; height:14px; border-radius:50%; background:#6b7280;"></span>
+            <span id="telegramTestStatus" style="color:#8b949e; font-size:0.85rem;">Não testado</span>
+        </div>
+        <button id="telegramTestBtn" class="btn-io primary" style="background:#7c3aed; border-color:#7c3aed;">📨 Enviar mensagem de teste</button>
+        <span id="telegramTestLog" style="color:#6b7280; font-size:0.8rem; flex:1; min-width:150px;">Clique no botão para testar</span>
+    </div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "./backtest_engine.js": "./backtest_engine.js",
+        "./novas_secoes.js": "./novas_secoes.js"
+    }
+}
+</script>
+
+<script type="module">
+    // ============================================================
+    // IMPORTA OS MÓDULOS
+    // ============================================================
+    import './backtest_engine.js'; // inicializa toda a lógica do backtest e UI
+    import { initMultiCandlestick, initOnChain } from './novas_secoes.js';
+
+    // ============================================================
+    // INICIALIZA OS 3 GRÁFICOS E ON-CHAIN
+    // ============================================================
+    document.addEventListener('DOMContentLoaded', () => {
+        const tf = document.getElementById('multiTimeframe').value;
+        initMultiCandlestick(tf);
+        initOnChain();
+
+        document.getElementById('multiRefreshBtn').addEventListener('click', () => {
+            const newTf = document.getElementById('multiTimeframe').value;
+            initMultiCandlestick(newTf);
+        });
+        document.getElementById('multiTimeframe').addEventListener('change', () => {
+            document.getElementById('multiRefreshBtn').click();
+        });
     });
-    
-    // Devolve os dados da CoinMetrics para o seu front-end
-    res.json(resposta.data);
-  } catch (erro) {
-    console.error('Erro no proxy:', erro.message);
-    // Se a CoinMetrics devolveu erro, repassa o status
-    res.status(erro.response?.status || 500).json({
-      erro: 'Falha ao buscar dados da CoinMetrics'
-    });
-  }
-});
 
-// Inicia o servidor
-app.listen(PORT, () => {
-  console.log(`Proxy rodando em http://localhost:${PORT}`);
-});
+    console.log('✅ Backtest Engine v4.0 (Scalp) – todos os módulos carregados.');
+</script>
+</body>
+</html>
