@@ -2562,7 +2562,9 @@ async function loadParamsFromCloud() {
 
 // Inicialização: carrega parâmetros da nuvem e configura eventos de salvamento
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadParamsFromCloud();
+    try {
+        await loadParamsFromCloud();
+    } catch(e) {
     document.querySelectorAll('.params-grid input, .params-grid select').forEach(el => {
         el.addEventListener('change', syncParamsToCloud);
         el.addEventListener('input', syncParamsToCloud);
