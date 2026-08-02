@@ -1,1 +1,1 @@
-# server
+# BTC-Sniper-V2
