@@ -1,11 +1,11 @@
 // ============================================================
-// backtest_engine.js – Motor completo de backtest, UI e robô
+// backtest_engine.js – Motor completo de backtest, UI e robô (SCALP 5M/1H)
 // ============================================================
 
 // ===== VARIÁVEIS GLOBAIS =====
 let cachedData = {
+    candles5m: [],
     candles1h: [],
-    candles4h: [],
     funding: [],
     oi: [],
     mvrv: []
@@ -16,7 +16,7 @@ let lastParams = null;
 let liveInterval = null;
 
 // ============================================================
-// FUNÇÕES DO INDICADOR
+// FUNÇÕES DO INDICADOR (ajustadas para scalp)
 // ============================================================
 const calcEMA = (data, period) => {
     if (!data || data.length === 0) return [];
@@ -31,7 +31,7 @@ const calcEMA = (data, period) => {
     return result;
 };
 
-const calculateATR = (candles, period = 14, lookback = 100) => {
+const calculateATR = (candles, period = 10, lookback = 70) => {
     const data = candles.slice(-Math.max(lookback, period + 1));
     if (data.length < period + 1) return 0;
     const tr = [];
@@ -59,7 +59,7 @@ const calculateVWAP = (candles) => {
     return vol > 0 ? sum / vol : 0;
 };
 
-const calculateADX = (candles, period = 14, lookback = 50) => {
+const calculateADX = (candles, period = 10, lookback = 40) => {
     const data = candles.slice(-Math.max(lookback, period * 2 + 1));
     if (data.length < period * 2 + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
     const high = data.map(c => c.high);
@@ -100,7 +100,7 @@ const calculateADX = (candles, period = 14, lookback = 50) => {
     return { adx, plusDI: finalPlusDI, minusDI: finalMinusDI };
 };
 
-const detectRSIDivergence = (candles, rsiValues, lookback = 50) => {
+const detectRSIDivergence = (candles, rsiValues, lookback = 40) => {
     if (candles.length < lookback + 14 || rsiValues.length < lookback) return null;
     const startIdx = candles.length - lookback;
     const findPeaks = (arr, getValue) => {
@@ -135,7 +135,7 @@ const detectRSIDivergence = (candles, rsiValues, lookback = 50) => {
         const r1 = rsiHighs[rsiHighs.length - 2];
         const r2 = rsiHighs[rsiHighs.length - 1];
         const drop = r1.value - r2.value;
-        if (p2.value > p1.value && r2.value < r1.value && drop >= 5 && r1.value > 55) {
+        if (p2.value > p1.value && r2.value < r1.value && drop >= 3 && r1.value > 55) {
             return { type: 'BEARISH_REGULAR', strength: drop / r1.value };
         }
     }
@@ -145,7 +145,7 @@ const detectRSIDivergence = (candles, rsiValues, lookback = 50) => {
         const r1 = rsiLows[rsiLows.length - 2];
         const r2 = rsiLows[rsiLows.length - 1];
         const rise = r2.value - r1.value;
-        if (p2.value < p1.value && r2.value > r1.value && rise >= 5 && r1.value < 45) {
+        if (p2.value < p1.value && r2.value > r1.value && rise >= 3 && r1.value < 45) {
             return { type: 'BULLISH_REGULAR', strength: rise / r1.value };
         }
     }
@@ -153,7 +153,7 @@ const detectRSIDivergence = (candles, rsiValues, lookback = 50) => {
 };
 
 const updateSwingPoints = (state) => {
-    const candles = state.candles1H || [];
+    const candles = state.candles5M || [];
     if (candles.length < 7) return;
     const c1 = candles[candles.length - 7];
     const c2 = candles[candles.length - 6];
@@ -174,9 +174,9 @@ const updateSwingPoints = (state) => {
     }
 };
 
-const detectHTFStructure = (candles4H, bullishVelas = 3, bearishVelas = 6) => {
-    if (!candles4H || candles4H.length < 55) return { bias: 'NEUTRAL', lastSwingHigh: 0, lastSwingLow: Infinity };
-    const closes = candles4H.map(c => c.close);
+const detectHTFStructure = (candles1H, bullishVelas = 2, bearishVelas = 2) => {
+    if (!candles1H || candles1H.length < 55) return { bias: 'NEUTRAL', lastSwingHigh: 0, lastSwingLow: Infinity };
+    const closes = candles1H.map(c => c.close);
     const ema200Arr = calcEMA(closes, 200);
     const lastBull = closes.slice(-bullishVelas);
     const lastBear = closes.slice(-bearishVelas);
@@ -187,10 +187,10 @@ const detectHTFStructure = (candles4H, bullishVelas = 3, bearishVelas = 6) => {
     let bias = 'NEUTRAL';
     if (allBelow) bias = 'BEARISH';
     else if (allAbove) bias = 'BULLISH';
-    return { bias, lastSwingHigh: Math.max(...candles4H.map(c => c.high)), lastSwingLow: Math.min(...candles4H.map(c => c.low)) };
+    return { bias, lastSwingHigh: Math.max(...candles1H.map(c => c.high)), lastSwingLow: Math.min(...candles1H.map(c => c.low)) };
 };
 
-const checkLateralMarket = (adxValue, threshold = 20) => adxValue < threshold;
+const checkLateralMarket = (adxValue, threshold = 15) => adxValue < threshold;
 
 const checkDerivativesFilter = (fundingRate, oiDelta) => {
     if (fundingRate > 0.0020) return { allow: false, reason: 'Funding extremamente positivo (>0.2%)' };
@@ -199,7 +199,7 @@ const checkDerivativesFilter = (fundingRate, oiDelta) => {
     return { allow: true, reason: 'OK' };
 };
 
-const detectVolumeAnomaly = (candles, period = 20, threshold = 1.5) => {
+const detectVolumeAnomaly = (candles, period = 14, threshold = 1.5) => {
     if (candles.length < period) return null;
     const volumes = candles.map(c => c.volume);
     const avg = volumes.slice(-period).reduce((a, b) => a + b, 0) / period;
@@ -224,7 +224,7 @@ const computeScore = (symbol, assetsData, liqMap, adxThreshold) => {
     const mtfScore = data.mtfConfluence?.score || 0;
     const adxRaw = data.adx;
     const adxValue = typeof adxRaw === 'object' ? (adxRaw?.adx || 0) : (adxRaw || 0);
-    const rsi = data.rsi_1H || 50;
+    const rsi = data.rsi_5M || 50;
     let score = base;
     if (mtfScore > 0) score += 15;
     else if (mtfScore < 0) score -= 15;
@@ -249,7 +249,7 @@ const computeScore = (symbol, assetsData, liqMap, adxThreshold) => {
 };
 
 // ============================================================
-// FETCH FUNCTIONS
+// FETCH FUNCTIONS (com suporte a 5m e 1h)
 // ============================================================
 const fetchWithRetry = async (url, opts = {}, retries = 5) => {
     let delay = 100;
@@ -377,7 +377,7 @@ const findMostRecent = (arr, cond) => {
 };
 
 // ============================================================
-// IMPORTAÇÃO / EXPORTAÇÃO DE DADOS
+// IMPORTAÇÃO / EXPORTAÇÃO DE DADOS (ajustado para 5m/1h)
 // ============================================================
 async function fetchRawData(symbol = 'BTCUSDT') {
     const days = 1000;
@@ -387,20 +387,20 @@ async function fetchRawData(symbol = 'BTCUSDT') {
     const startDateStr = new Date(startTime).toISOString().slice(0, 10);
     const endDateStr = new Date(endTime).toISOString().slice(0, 10);
     console.log(`[FetchRaw] Buscando ${days} dias para ${symbol}...`);
-    const [candles1h, candles4h, funding, oi, mvrv] = await Promise.all([
+    const [candles5m, candles1h, funding, oi, mvrv] = await Promise.all([
+        fetchHistoricalCandlesPaged(symbol, '5m', startTime, endTime, 1000),
         fetchHistoricalCandlesPaged(symbol, '1h', startTime, endTime, 1000),
-        fetchHistoricalCandlesPaged(symbol, '4h', startTime, endTime, 1000),
         fetchHistoricalFunding(symbol, startTime, endTime),
         fetchHistoricalOI(symbol, startTime, endTime),
         fetchHistoricalMVRV(startDateStr, endDateStr)
     ]);
-    return { candles1h, candles4h, funding, oi, mvrv };
+    return { candles5m, candles1h, funding, oi, mvrv };
 }
 
 function exportData() {
     const datasets = {
+        candles5m: cachedData.candles5m,
         candles1h: cachedData.candles1h,
-        candles4h: cachedData.candles4h,
         funding: cachedData.funding,
         oi: cachedData.oi,
         mvrv: cachedData.mvrv
@@ -430,13 +430,13 @@ async function fetchAndExport() {
     status.textContent = '⏳ Buscando dados de 1000 dias...';
     try {
         const data = await fetchRawData(symbol);
+        cachedData.candles5m = data.candles5m;
         cachedData.candles1h = data.candles1h;
-        cachedData.candles4h = data.candles4h;
         cachedData.funding = data.funding;
         cachedData.oi = data.oi;
         cachedData.mvrv = data.mvrv;
         cachedSymbol = symbol;
-        console.log(`Dados armazenados: 1h=${data.candles1h.length}, 4h=${data.candles4h.length}, funding=${data.funding.length}, OI=${data.oi.length}, MVRV=${data.mvrv.length}`);
+        console.log(`Dados armazenados: 5m=${data.candles5m.length}, 1h=${data.candles1h.length}, funding=${data.funding.length}, OI=${data.oi.length}, MVRV=${data.mvrv.length}`);
         status.textContent = `✅ Dados de 1000 dias coletados. Exportando...`;
         exportData();
         status.textContent = `✅ Dados de 1000 dias exportados com sucesso!`;
@@ -448,8 +448,8 @@ async function fetchAndExport() {
 
 function importData(files) {
     const fileMap = {
+        'candles5m': 'candles5m',
         'candles1h': 'candles1h',
-        'candles4h': 'candles4h',
         'funding': 'funding',
         'oi': 'oi',
         'mvrv': 'mvrv'
@@ -476,38 +476,39 @@ function importData(files) {
 }
 
 // ============================================================
-// BACKTEST COMPLETO
+// BACKTEST COMPLETO (SCALP 5M/1H)
 // ============================================================
 export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     const {
-        scoreMin = 68,
-        scoreMaxShort = 32,
-        adxMin = 22,
-        rrMin = 1.8,
-        retestDistPct = 2.0,
-        emaRetest = false,
+        scoreMin = 51,
+        scoreMaxShort = 49,
+        adxMin = 12,
+        rrMin = 1.0,
+        retestDistPct = 2.5,
+        emaRetest = true,
         mtfRequired = true,
         ignoreBOS = false,
         ignoreRetest = false,
-        requireSweep = false,
-        zFundingMax = 1.5,
-        zOiMax = 1.5,
+        requireSweep = true,
+        zFundingMax = 2.0,
+        zOiMax = 2.0,
         maxHoldHours = 72,
-        htfBullishVelas = 3,
+        htfBullishVelas = 2,
         diDiffMinLong = 0,
-        mvrvDropPercent = 0.15,
-        htfBearishVelas = 6,
-        diDiffMinShort = 5,
-        stopLong = 1.5,
-        stopShort = 2.0,
-        tp1Long = 2.0,
+        mvrvDropPercent = 0.25,
+        htfBearishVelas = 2,
+        diDiffMinShort = 8,
+        stopLong = 0.8,
+        stopShort = 0.8,
+        tp1Long = 1.5,
         tp1Short = 1.5,
-        tp2Dist = 4.0,
-        trailLong = 1.2,
-        trailShort = 1.5,
-        tp1Pct = 0.4,
-        tp2Pct = 0.4,
-        runnerPct = 0.2
+        tp2Dist = 2.5,
+        trailLong = 0.5,
+        trailShort = 0.5,
+        tp1Pct = 0.7,
+        tp2Pct = 0.0,
+        runnerPct = 0.3,
+        dojiThreshold = 0.15
     } = options;
 
     days = Math.min(days, 1000);
@@ -517,28 +518,28 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     const startDateStr = new Date(startTime).toISOString().slice(0, 10);
     const endDateStr = new Date(endTime).toISOString().slice(0, 10);
 
-    console.log(`[Backtest] ${symbol} - ${days} dias`);
+    console.log(`[Backtest Scalp] ${symbol} - ${days} dias`);
 
+    let candles5m = cachedData.candles5m;
     let candles1h = cachedData.candles1h;
-    let candles4h = cachedData.candles4h;
     let fundingHist = cachedData.funding;
     let oiHist = cachedData.oi;
     let mvrvHist = cachedData.mvrv;
 
-    const needFetch = candles1h.length === 0 || cachedSymbol !== symbol;
+    const needFetch = candles5m.length === 0 || cachedSymbol !== symbol;
 
     if (needFetch) {
         console.log(`Cache para ${symbol} não encontrado. Buscando dados da API...`);
         try {
-            [candles1h, candles4h, fundingHist, oiHist, mvrvHist] = await Promise.all([
+            [candles5m, candles1h, fundingHist, oiHist, mvrvHist] = await Promise.all([
+                fetchHistoricalCandlesPaged(symbol, '5m', startTime, endTime, 1000),
                 fetchHistoricalCandlesPaged(symbol, '1h', startTime, endTime, 1000),
-                fetchHistoricalCandlesPaged(symbol, '4h', startTime, endTime, 1000),
                 fetchHistoricalFunding(symbol, startTime, endTime),
                 fetchHistoricalOI(symbol, startTime, endTime),
                 fetchHistoricalMVRV(startDateStr, endDateStr)
             ]);
+            cachedData.candles5m = candles5m;
             cachedData.candles1h = candles1h;
-            cachedData.candles4h = candles4h;
             cachedData.funding = fundingHist;
             cachedData.oi = oiHist;
             cachedData.mvrv = mvrvHist;
@@ -548,26 +549,17 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             return { trades: [], summary: { error: `Erro ao buscar dados: ${e.message}` } };
         }
     } else {
-        console.log(`Usando dados do cache para ${symbol} (${candles1h.length} candles).`);
+        console.log(`Usando dados do cache para ${symbol} (5m=${candles5m.length}, 1h=${candles1h.length}).`);
     }
 
-    if (mvrvHist.length > 0) {
-        const values = mvrvHist.map(m => m.value);
-        console.log('📊 MVRV — min:', Math.min(...values).toFixed(2),
-                    'max:', Math.max(...values).toFixed(2),
-                    'média:', (values.reduce((a,b)=>a+b,0)/values.length).toFixed(2));
-    } else {
-        console.warn('⚠️ Nenhum dado MVRV disponível para diagnóstico.');
-    }
-
-    const filteredCandles = candles1h.filter(c => c.time >= startTime && c.time <= endTime);
-    console.log(`Filtrados para o período: ${filteredCandles.length} candles`);
+    const filteredCandles = candles5m.filter(c => c.time >= startTime && c.time <= endTime);
+    console.log(`Filtrados para o período: ${filteredCandles.length} candles 5m`);
 
     const minCandles = (days >= 2) ? 50 : 20;
     if (filteredCandles.length < minCandles) {
-        let msg = `Dados insuficientes: obtidos ${filteredCandles.length} velas no período, necessário ${minCandles}.`;
-        if (!needFetch && cachedData.candles1h.length > 0) {
-            const lastTime = cachedData.candles1h[cachedData.candles1h.length - 1]?.time;
+        let msg = `Dados insuficientes: obtidos ${filteredCandles.length} velas 5m, necessário ${minCandles}.`;
+        if (!needFetch && cachedData.candles5m.length > 0) {
+            const lastTime = cachedData.candles5m[cachedData.candles5m.length - 1]?.time;
             if (lastTime) {
                 const lastDate = new Date(lastTime).toLocaleDateString();
                 msg += ` O dado mais recente no cache é de ${lastDate}. `;
@@ -578,14 +570,32 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     }
 
     const state = {
-        candles1H: [], candles4H: candles4h || [], ema50_1H: 0, ema200_4H: 0,
-        rsi_1H: 50, atr_1H: 0, atrHistory: [], swingHighs: [], swingLows: [],
-        currentBOS: 'NEUTRAL', htfStructure: { bias: 'NEUTRAL', lastSwingHigh: 0, lastSwingLow: Infinity },
-        mtfConfluence: null, adx: 0, divergence: null, divergence4H: null,
-        volumeAnomaly: null, macroBlackout: false, vwap: 0, price: 0,
-        fundingRate: 0, oiDelta: 0, mvrv: null,
+        candles5M: [],
+        candles1H: candles1h || [],
+        ema50_5M: 0,
+        ema200_1H: 0,
+        rsi_5M: 50,
+        atr_5M: 0,
+        atrHistory: [],
+        swingHighs: [],
+        swingLows: [],
+        currentBOS: 'NEUTRAL',
+        htfStructure: { bias: 'NEUTRAL', lastSwingHigh: 0, lastSwingLow: Infinity },
+        mtfConfluence: null,
+        adx: 0,
+        divergence: null,
+        divergence1H: null,
+        volumeAnomaly: null,
+        macroBlackout: false,
+        vwap: 0,
+        price: 0,
+        fundingRate: 0,
+        oiDelta: 0,
+        mvrv: null,
         mvrvHistory: [],
-        fundingHistory: [], oiDeltaHistory: [], bandwidthHistory: [],
+        fundingHistory: [],
+        oiDeltaHistory: [],
+        bandwidthHistory: [],
         adxRolling: [],
         volatilityFactor: 1.0
     };
@@ -598,58 +608,58 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     const blockStats = {};
     let totalCandlesProcessed = 0;
 
-    // ----- UPDATE INDICADORES -----
+    // ----- UPDATE INDICADORES (para 5m/1h) -----
     const updateIndicators = (candles, currentTime, bullishVelas, bearishVelas) => {
-        if (candles.length < 14) return;
+        if (candles.length < 10) return;
         const closes = candles.map(c => c.close);
-        state.ema50_1H = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
-        state.atr_1H = calculateATR(candles, 14);
-        state.atrHistory.push(state.atr_1H);
+        state.ema50_5M = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
+        state.atr_5M = calculateATR(candles, 10);
+        state.atrHistory.push(state.atr_5M);
         if (state.atrHistory.length > 100) state.atrHistory.shift();
 
         let avgGain = 0, avgLoss = 0;
-        for (let i = closes.length - 14; i < closes.length; i++) {
+        for (let i = closes.length - 10; i < closes.length; i++) {
             const diff = closes[i] - closes[i - 1];
             if (diff > 0) avgGain += diff;
             else avgLoss += Math.abs(diff);
         }
-        avgGain /= 14;
-        avgLoss /= 14;
-        state.rsi_1H = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+        avgGain /= 10;
+        avgLoss /= 10;
+        state.rsi_5M = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
 
-        const adxData = calculateADX(candles);
+        const adxData = calculateADX(candles, 10);
         state.adx = adxData;
 
-        const last24 = candles.slice(-24);
-        state.vwap = calculateVWAP(last24);
+        const last20 = candles.slice(-20);
+        state.vwap = calculateVWAP(last20);
 
-        const volAnomaly = detectVolumeAnomaly(candles, 20, 2.0);
+        const volAnomaly = detectVolumeAnomaly(candles, 14, 1.5);
         state.volumeAnomaly = volAnomaly;
 
         updateSwingPoints(state);
 
-        const relevant4H = state.candles4H.filter(c => c.time <= currentTime);
-        if (relevant4H.length >= 20) {
-            state.htfStructure = detectHTFStructure(relevant4H, bullishVelas, bearishVelas);
+        const relevant1H = state.candles1H.filter(c => c.time <= currentTime);
+        if (relevant1H.length >= 20) {
+            state.htfStructure = detectHTFStructure(relevant1H, bullishVelas, bearishVelas);
         }
 
         let rsiForDiv = [];
         let g = 0, l = 0;
         for (let i = 1; i < closes.length; i++) {
             const d = closes[i] - closes[i - 1];
-            if (i <= 14) {
+            if (i <= 10) {
                 if (d >= 0) g += d;
                 else l -= d;
-                if (i === 14) {
-                    let ag = g / 14, al = l / 14;
+                if (i === 10) {
+                    let ag = g / 10, al = l / 10;
                     rsiForDiv.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                 }
             } else {
                 const gain = d > 0 ? d : 0;
                 const loss = d < 0 ? -d : 0;
                 const prevR = rsiForDiv[rsiForDiv.length - 1];
-                const ag = (prevR * 13 + gain) / 14;
-                const al = (prevR * 13 + loss) / 14;
+                const ag = (prevR * 9 + gain) / 10;
+                const al = (prevR * 9 + loss) / 10;
                 rsiForDiv.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
             }
         }
@@ -658,31 +668,31 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             state.divergence = div;
         }
 
-        if (relevant4H.length >= 30) {
-            const closes4H = relevant4H.map(c => c.close);
-            let rsi4H = [];
-            let g4 = 0, l4 = 0;
-            for (let i = 1; i < closes4H.length; i++) {
-                const d = closes4H[i] - closes4H[i-1];
-                if (i <= 14) {
-                    if (d >= 0) g4 += d;
-                    else l4 -= d;
-                    if (i === 14) {
-                        let ag = g4 / 14, al = l4 / 14;
-                        rsi4H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+        if (relevant1H.length >= 25) {
+            const closes1H = relevant1H.map(c => c.close);
+            let rsi1H = [];
+            let g1 = 0, l1 = 0;
+            for (let i = 1; i < closes1H.length; i++) {
+                const d = closes1H[i] - closes1H[i-1];
+                if (i <= 10) {
+                    if (d >= 0) g1 += d;
+                    else l1 -= d;
+                    if (i === 10) {
+                        let ag = g1 / 10, al = l1 / 10;
+                        rsi1H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                     }
                 } else {
                     const gain = d > 0 ? d : 0;
                     const loss = d < 0 ? -d : 0;
-                    const prevR = rsi4H[rsi4H.length - 1];
-                    const ag = (prevR * 13 + gain) / 14;
-                    const al = (prevR * 13 + loss) / 14;
-                    rsi4H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+                    const prevR = rsi1H[rsi1H.length - 1];
+                    const ag = (prevR * 9 + gain) / 10;
+                    const al = (prevR * 9 + loss) / 10;
+                    rsi1H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                 }
             }
-            if (rsi4H.length > 20) {
-                const div4H = detectRSIDivergence(relevant4H, rsi4H);
-                state.divergence4H = div4H;
+            if (rsi1H.length > 20) {
+                const div1H = detectRSIDivergence(relevant1H, rsi1H);
+                state.divergence1H = div1H;
             }
         }
 
@@ -695,11 +705,11 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         }
     };
 
-    // ----- MTF -----
+    // ----- MTF (1H e 4H? apenas 1H como superior) -----
     const getMTFAlignmentAtTime = (currentTime) => {
+        const relevant5M = state.candles5M.filter(c => c.time <= currentTime).slice(-50);
         const relevant1H = state.candles1H.filter(c => c.time <= currentTime).slice(-50);
-        const relevant4H = state.candles4H.filter(c => c.time <= currentTime).slice(-50);
-        if (relevant1H.length < 20 || relevant4H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
+        if (relevant5M.length < 20 || relevant1H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
         
         const getDir = (candles) => {
             if (candles.length < 20) return 'NEUTRO';
@@ -718,14 +728,14 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             if (isBear && slopeDown) return 'BEAR';
             return 'NEUTRO';
         };
+        const dir5M = getDir(relevant5M);
         const dir1H = getDir(relevant1H);
-        const dir4H = getDir(relevant4H);
-        const bulls = [dir1H, dir4H].filter(d => d === 'BULL').length;
-        const bears = [dir1H, dir4H].filter(d => d === 'BEAR').length;
+        const bulls = [dir5M, dir1H].filter(d => d === 'BULL').length;
+        const bears = [dir5M, dir1H].filter(d => d === 'BEAR').length;
         const alinhadoForte = bulls === 2 || bears === 2;
-        const alinhadoParcial = (dir4H === 'BULL' && dir1H !== 'BEAR') || (dir4H === 'BEAR' && dir1H !== 'BULL');
+        const alinhadoParcial = (dir1H === 'BULL' && dir5M !== 'BEAR') || (dir1H === 'BEAR' && dir5M !== 'BULL');
         return {
-            directions: [{ tf: '1h', dir: dir1H }, { tf: '4h', dir: dir4H }],
+            directions: [{ tf: '5m', dir: dir5M }, { tf: '1h', dir: dir1H }],
             score: bulls - bears,
             alinhado: alinhadoForte,
             alinhadoParcial: alinhadoParcial
@@ -736,8 +746,8 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     for (let i = 0; i < filteredCandles.length; i++) {
         const candle = filteredCandles[i];
         state.price = candle.close;
-        state.candles1H.push(candle);
-        if (state.candles1H.length > 200) state.candles1H.shift();
+        state.candles5M.push(candle);
+        if (state.candles5M.length > 200) state.candles5M.shift();
 
         const fundingAtTime = findMostRecent(fundingHist, f => f.time <= candle.time * 1000) || fundingHist[0];
         state.fundingRate = fundingAtTime ? fundingAtTime.rate : 0;
@@ -763,14 +773,16 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
 
         state.mtfConfluence = getMTFAlignmentAtTime(candle.time);
 
-        if (state.candles1H.length >= 20) {
-            updateIndicators(state.candles1H, candle.time, htfBullishVelas, htfBearishVelas);
+        if (state.candles5M.length >= 20) {
+            updateIndicators(state.candles5M, candle.time, htfBullishVelas, htfBearishVelas);
         } else {
             continue;
         }
 
-        // ----- FILTROS -----
-        const closes = state.candles1H.slice(-20).map(c => c.close);
+        // ----- FILTROS (SCALP) -----
+
+        // 1. Bandwidth + Mercado Lateral (ADX + Bandwidth)
+        const closes = state.candles5M.slice(-20).map(c => c.close);
         if (closes.length >= 20) {
             const sma = closes.reduce((a,b) => a+b, 0) / 20;
             const variance = closes.reduce((s, v) => s + (v-sma)**2, 0) / 20;
@@ -778,15 +790,19 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             const bandwidth = (2 * stdBB) / sma;
             state.bandwidthHistory.push(bandwidth);
             if (state.bandwidthHistory.length > 50) state.bandwidthHistory.shift();
-            if (state.bandwidthHistory.length >= 20) {
-                const avgBW = state.bandwidthHistory.slice(-20).reduce((a,b) => a+b, 0) / 20;
-                if (bandwidth < avgBW * 0.6) {
-                    blockStats['baixa_volatilidade_bb'] = (blockStats['baixa_volatilidade_bb'] || 0) + 1;
+            if (state.bandwidthHistory.length >= 10) {
+                const avgBW = state.bandwidthHistory.slice(-10).reduce((a,b) => a+b, 0) / 10;
+                const adxVal = typeof state.adx === 'object' ? state.adx.adx : state.adx;
+                const bwPass = bandwidth >= avgBW * 0.25;
+                const rangePass = (adxVal >= 15) || (bandwidth >= avgBW * 0.35);
+                if (!bwPass || !rangePass) {
+                    blockStats['mercado_lateral'] = (blockStats['mercado_lateral'] || 0) + 1;
                     continue;
                 }
             }
         }
 
+        // 2. Funding Z-score
         if (state.fundingHistory.length >= 20) {
             const mean = state.fundingHistory.reduce((a,b) => a+b, 0) / state.fundingHistory.length;
             const variance = state.fundingHistory.reduce((s, v) => s + (v-mean)**2, 0) / state.fundingHistory.length;
@@ -798,6 +814,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
         }
 
+        // 3. OI Z-score
         if (state.oiDeltaHistory.length >= 20) {
             const meanO = state.oiDeltaHistory.reduce((a,b) => a+b, 0) / state.oiDeltaHistory.length;
             const varO = state.oiDeltaHistory.reduce((s, v) => s + (v-meanO)**2, 0) / state.oiDeltaHistory.length;
@@ -812,12 +829,12 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         const simAssets = {
             [symbol]: {
                 price: state.price,
+                candles5M: state.candles5M,
                 candles1H: state.candles1H,
-                candles4H: state.candles4H,
-                ema50_1H: state.ema50_1H,
-                ema200_4H: state.ema200_4H,
-                rsi_1H: state.rsi_1H,
-                atr_1H: state.atr_1H,
+                ema50_5M: state.ema50_5M,
+                ema200_1H: state.ema200_1H,
+                rsi_5M: state.rsi_5M,
+                atr_5M: state.atr_5M,
                 atrHistory: state.atrHistory,
                 swingHighs: state.swingHighs,
                 swingLows: state.swingLows,
@@ -851,10 +868,10 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         }
 
         if (primaryDirection === 'LONG' && !blockReason && state.htfStructure.bias === 'BEARISH') {
-            blockReason = `HTF 4H Bearish (${htfBullishVelas} velas bullish necessárias)`;
+            blockReason = `HTF 1H Bearish (${htfBullishVelas} velas bullish necessárias)`;
         }
         if (primaryDirection === 'SHORT' && !blockReason && state.htfStructure.bias === 'BULLISH') {
-            blockReason = `HTF 4H Bullish (${htfBearishVelas} velas bearish necessárias)`;
+            blockReason = `HTF 1H Bullish (${htfBearishVelas} velas bearish necessárias)`;
         }
 
         if (primaryDirection === 'LONG' && !blockReason) {
@@ -869,7 +886,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
         }
 
-        const prevCandle = state.candles1H.length > 1 ? state.candles1H[state.candles1H.length - 2] : null;
+        const prevCandle = state.candles5M.length > 1 ? state.candles5M[state.candles5M.length - 2] : null;
         const lastSwingHigh = state.swingHighs.length > 0 ? state.swingHighs[state.swingHighs.length - 1] : null;
         const lastSwingLow = state.swingLows.length > 0 ? state.swingLows[state.swingLows.length - 1] : null;
         const refHigh = lastSwingHigh || (prevCandle ? prevCandle.high : null);
@@ -883,13 +900,8 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         state.adxRolling.push(adxValNow);
         if (state.adxRolling.length > 50) state.adxRolling.shift();
 
-        if (state.adxRolling.length >= 20) {
-            const avgAdx = state.adxRolling.reduce((a,b) => a+b, 0) / state.adxRolling.length;
-            const dynamicAdxThreshold = Math.max(avgAdx * 0.8 + 5, 18);
-            if (adxValNow < dynamicAdxThreshold) {
-                blockReason = `ADX ${adxValNow.toFixed(1)} < dinâmico ${dynamicAdxThreshold.toFixed(1)}`;
-            }
-        }
+        // ADX dinâmico (desativado para scalp, mas mantido como referência)
+        // Não bloqueia, apenas registra
 
         if (adxValNow < adxMin && !blockReason) blockReason = `ADX < ${adxMin}`;
         if (state.macroBlackout && !blockReason) blockReason = 'Macro blackout';
@@ -908,7 +920,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             if (!derivCheck.allow) blockReason = derivCheck.reason;
         }
 
-        // ----- GESTÃO DE POSIÇÃO -----
+        // ----- GESTÃO DE POSIÇÃO (mantida similar, com trailing ajustado) -----
         if (position) {
             const high = candle.high, low = candle.low;
             let closed = false, exitPrice = 0, reason = '';
@@ -948,12 +960,12 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                         equity += position.partialPnlUsd;
                         if (equity > highWaterMark) highWaterMark = equity;
                         position.sizeRemaining -= closeSize;
-                        position.trailingStop = Math.max(position.entryPrice, position.entryPrice + state.atr_1H * volatilityFactor * trailLong);
+                        position.trailingStop = Math.max(position.entryPrice, position.entryPrice + state.atr_5M * volatilityFactor * trailLong);
                         position.maxProfitPrice = high;
                     }
                     else if (position.partialTaken) {
                         position.maxProfitPrice = Math.max(position.maxProfitPrice || position.entryPrice, high);
-                        const newStop = position.maxProfitPrice - (state.atr_1H * volatilityFactor * trailLong);
+                        const newStop = position.maxProfitPrice - (state.atr_5M * volatilityFactor * trailLong);
                         if (newStop > position.trailingStop) position.trailingStop = newStop;
                         if (low <= position.trailingStop) {
                             exitPrice = position.trailingStop; closed = true; reason = 'Chandelier Exit';
@@ -984,12 +996,12 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                         equity += position.partialPnlUsd;
                         if (equity > highWaterMark) highWaterMark = equity;
                         position.sizeRemaining -= closeSize;
-                        position.trailingStop = Math.min(position.entryPrice, position.entryPrice - state.atr_1H * volatilityFactor * trailShort);
+                        position.trailingStop = Math.min(position.entryPrice, position.entryPrice - state.atr_5M * volatilityFactor * trailShort);
                         position.maxProfitPrice = low;
                     }
                     else if (position.partialTaken) {
                         position.maxProfitPrice = Math.min(position.maxProfitPrice || position.entryPrice, low);
-                        const newStop = position.maxProfitPrice + (state.atr_1H * volatilityFactor * trailShort);
+                        const newStop = position.maxProfitPrice + (state.atr_5M * volatilityFactor * trailShort);
                         if (newStop < position.trailingStop) position.trailingStop = newStop;
                         if (high >= position.trailingStop) {
                             exitPrice = position.trailingStop; closed = true; reason = 'Chandelier Exit';
@@ -1030,9 +1042,9 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
         }
 
-        // ----- ENTRADA -----
+        // ----- ENTRADA (SCALP) -----
         if (!position && !blockReason && primaryDirection) {
-            const atr = state.atr_1H || (state.price * 0.02);
+            const atr = state.atr_5M || (state.price * 0.02);
             let smcSetup = false, sweepSetup = false, retestConfirmed = false, brokenLevel = null;
             const recentHighs = state.swingHighs.slice(-3);
             const recentLows = state.swingLows.slice(-3);
@@ -1044,7 +1056,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                 if (brokenHighs.length > 0) {
                     brokenLevel = Math.max(...brokenHighs);
                     smcSetup = true;
-                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_1H || (state.price * 0.01));
+                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || (state.price * 0.01));
                     retestConfirmed = distInAtr < retestDistPctEffective;
                 }
             } else {
@@ -1052,14 +1064,14 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                 if (brokenLows.length > 0) {
                     brokenLevel = Math.min(...brokenLows);
                     smcSetup = true;
-                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_1H || (state.price * 0.01));
+                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || (state.price * 0.01));
                     retestConfirmed = distInAtr < retestDistPctEffective;
                 }
             }
 
             if (!retestConfirmed && emaRetest) {
-                const ema20 = calcEMA(state.candles1H.map(c => c.close), 20).slice(-1)[0] || state.price;
-                const emaDist = Math.abs(state.price - ema20) / (state.atr_1H || (state.price * 0.01));
+                const ema20 = calcEMA(state.candles5M.map(c => c.close), 20).slice(-1)[0] || state.price;
+                const emaDist = Math.abs(state.price - ema20) / (state.atr_5M || (state.price * 0.01));
                 retestConfirmed = emaDist < 0.5;
                 if (retestConfirmed) smcSetup = true;
             }
@@ -1095,8 +1107,12 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             const retestPassed = retestRequired ? retestConfirmed : true;
             const structureOk = (bosPassed && retestPassed) || (sweepSetup && retestPassed);
 
-            const volumeAvg = state.candles1H.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-            const volumeOk = smcSetup ? state.candles1H[state.candles1H.length - 1].volume >= volumeAvg * 1.3 : true;
+            // Volume: percentil 25 + média*1.3
+            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a - b);
+            const p25 = volumes[Math.floor(0.25 * volumes.length)] || 0;
+            const avgVol = state.candles5M.slice(-14).reduce((s, c) => s + c.volume, 0) / 14;
+            const volumeOk = smcSetup ? (state.candles5M[state.candles5M.length - 1].volume >= p25 &&
+                                         state.candles5M[state.candles5M.length - 1].volume >= avgVol * 1.3) : true;
             const closeBreakOk = (primaryDirection === 'LONG' && candle.close > brokenLevel) ||
                                  (primaryDirection === 'SHORT' && candle.close < brokenLevel);
             if ((smcSetup && !volumeOk) || (smcSetup && !closeBreakOk)) {
@@ -1105,7 +1121,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
 
             const body = Math.abs(candle.close - candle.open);
             const range = candle.high - candle.low;
-            if (range > 0 && body / range < 0.5) {
+            if (range > 0 && body / range < dojiThreshold) {
                 blockReason = 'corpo_fraco_doji';
             }
 
@@ -1122,16 +1138,16 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
             blockStats[reasonKey] = (blockStats[reasonKey] || 0) + 1;
 
-            if (state.divergence4H) {
-                if ((state.divergence4H.type === 'BULLISH_REGULAR' && primaryDirection === 'LONG') ||
-                    (state.divergence4H.type === 'BEARISH_REGULAR' && primaryDirection === 'SHORT')) {
+            if (state.divergence1H) {
+                if ((state.divergence1H.type === 'BULLISH_REGULAR' && primaryDirection === 'LONG') ||
+                    (state.divergence1H.type === 'BEARISH_REGULAR' && primaryDirection === 'SHORT')) {
                     score += 8;
                 }
             }
 
             if (structureOk && !blockReason) {
                 let stop, tp1, tp2, tp3;
-                const volatilityAtr = state.atr_1H * (1 + state.volatilityFactor * 0.5);
+                const volatilityAtr = state.atr_5M * (1 + state.volatilityFactor * 0.5);
 
                 const stopMultiplier = primaryDirection === 'LONG' ? stopLong : stopShort;
                 const tp1Multiplier = primaryDirection === 'LONG' ? tp1Long : tp1Short;
@@ -1163,7 +1179,10 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                     rrPonderado = (stop - state.price) > 0 ? ganhoPonderado / (stop - state.price) : 0;
                 }
 
-                if (rrPonderado < rrMin) continue;
+                // R:R adaptativo (se stop < 0.8 ATR, reduz exigência)
+                const stopDistAtr = (primaryDirection === 'LONG') ? (state.price - stop) / state.atr_5M : (stop - state.price) / state.atr_5M;
+                const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : rrMin;
+                if (rrPonderado < rrMinEffective) continue;
 
                 const totalTrades = winCount + lossCount;
                 const winRate = totalTrades > 0 ? winCount / totalTrades : 0.5;
@@ -1272,7 +1291,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
 }
 
 // ============================================================
-// GERAR RELATÓRIO
+// GERAR RELATÓRIO (mantido igual, apenas referência)
 // ============================================================
 function generateReport(trades, summary, symbol, days, params) {
     if (!trades || trades.length === 0) {
@@ -1548,9 +1567,8 @@ function generateReport(trades, summary, symbol, days, params) {
 
     alert(`Relatório HTML e CSV baixados com sucesso!\nTrades: ${closed.length}`);
 }
-
 // ============================================================
-// UI – EVENT LISTENERS
+// UI – EVENT LISTENERS (ajustados para os novos parâmetros)
 // ============================================================
 const getParam = (id) => {
     const el = document.getElementById(id);
@@ -1565,7 +1583,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     status.textContent = '⏳ Preparando...';
 
     const symbol = document.getElementById('symbolSelect').value;
-    let days = parseInt(document.getElementById('days').value) || 999;
+    let days = parseInt(document.getElementById('days').value) || 30;
     days = Math.min(days, 1000);
     document.getElementById('days').value = days;
 
@@ -1580,8 +1598,8 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         requireBOS: getParam('requireBOS'),
         requireRetest: getParam('requireRetest'),
         requireSweep: getParam('requireSweep'),
-        zFundingMax: 1.5,
-        zOiMax: 1.5,
+        zFundingMax: getParam('zFundingMax') || 2.0,
+        zOiMax: getParam('zOiMax') || 2.0,
         maxHoldHours: getParam('maxHoldHours'),
         htfBullishVelas: getParam('htfBullishVelas'),
         diDiffMinLong: getParam('diDiffMinLong'),
@@ -1597,7 +1615,8 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         trailShort: getParam('trailShort'),
         tp1Pct: getParam('tp1Pct') / 100,
         tp2Pct: getParam('tp2Pct') / 100,
-        runnerPct: getParam('runnerPct') / 100
+        runnerPct: getParam('runnerPct') / 100,
+        dojiThreshold: getParam('dojiThreshold') || 0.15
     };
 
     try {
@@ -1722,7 +1741,7 @@ document.getElementById('reportBtn').addEventListener('click', () => {
     }
     const { trades, summary } = lastResult;
     const symbol = document.getElementById('symbolSelect').value;
-    const days = parseInt(document.getElementById('days').value) || 999;
+    const days = parseInt(document.getElementById('days').value) || 30;
     generateReport(trades, summary, symbol, days, lastParams);
 });
 
@@ -1745,12 +1764,12 @@ document.getElementById('liveModeBtn').addEventListener('click', async () => {
         try {
             const endTime = Date.now();
             const startTime = endTime - (100 * 24 * 60 * 60 * 1000);
-            const [c1h, c4h] = await Promise.all([
-                fetchHistoricalCandlesPaged(symbol, '1h', startTime, endTime, 1000),
-                fetchHistoricalCandlesPaged(symbol, '4h', startTime, endTime, 1000)
+            const [c5m, c1h] = await Promise.all([
+                fetchHistoricalCandlesPaged(symbol, '5m', startTime, endTime, 1000),
+                fetchHistoricalCandlesPaged(symbol, '1h', startTime, endTime, 1000)
             ]);
+            cachedData.candles5m = c5m;
             cachedData.candles1h = c1h;
-            cachedData.candles4h = c4h;
             cachedSymbol = symbol;
             document.getElementById('status').textContent = `✅ Dados atualizados: ${new Date().toLocaleTimeString()}`;
         } catch(e) {
@@ -1764,10 +1783,10 @@ document.getElementById('liveModeBtn').addEventListener('click', async () => {
 });
 
 // ============================================================
-// ROBÔ DE SINAIS
+// ROBÔ DE SINAIS (SCALP 5M/1H)
 // ============================================================
 const ROBOT_ASSETS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
-const SIGNAL_COOLDOWN_MS = 300000;
+const SIGNAL_COOLDOWN_MS = 300000; // cooldown fixo, mas pode ser dinâmico (usamos 5min base)
 let signalRobotInterval = null;
 let isRobotRunning = false;
 let lastSignalTime = {};
@@ -1793,13 +1812,16 @@ async function sendTelegramAlert(message) {
 async function sendSignalAlert(symbol, signal) {
     const dir = signal.direction;
     const emoji = dir === 'LONG' ? '🟢' : '🔴';
-    let msg = `${emoji} <b>SINAL ${dir} - ${symbol}</b>\n`;
+    let msg = `${emoji} <b>SINAL SCALP ${dir} - ${symbol}</b>\n`;
     msg += `Score: ${signal.score}/100\n`;
     msg += `Preço: $${signal.entryPrice.toFixed(2)}\n`;
     msg += `Stop: $${signal.stop.toFixed(2)}\n`;
     const rr1 = dir === 'LONG' ? (signal.tp1 - signal.entryPrice) / (signal.entryPrice - signal.stop) : (signal.entryPrice - signal.tp1) / (signal.stop - signal.entryPrice);
     const rr2 = dir === 'LONG' ? (signal.tp2 - signal.entryPrice) / (signal.entryPrice - signal.stop) : (signal.entryPrice - signal.tp2) / (signal.stop - signal.entryPrice);
     msg += `Alvos:\n  TP1: $${signal.tp1.toFixed(2)} (R:R ${rr1.toFixed(1)})\n  TP2: $${signal.tp2.toFixed(2)} (R:R ${rr2.toFixed(1)})\n`;
+    if (signal.trailingStop) {
+        msg += `Trailing Stop sugerido: $${signal.trailingStop.toFixed(2)}\n`;
+    }
     msg += `Estrutura: ${signal.rationale}\n⏰ ${new Date().toLocaleString('pt-BR')}`;
     const ok = await sendTelegramAlert(msg);
     if (ok) {
@@ -1808,7 +1830,7 @@ async function sendSignalAlert(symbol, signal) {
         localStorage.setItem('alertLog', JSON.stringify(alertLog));
         updateRobotLog(`✅ Sinal ${dir} enviado para ${symbol} (Score: ${signal.score})`);
         
-        // ===== ARMAZENA NO JSONBin (nuvem) =====
+        // Armazena no JSONBin
         await storeSignalToCloud({
             symbol,
             direction: dir,
@@ -1842,28 +1864,28 @@ function updateRobotLog(message) {
 async function checkSignal(symbol) {
     try {
         const now = Date.now();
-        const startTime1h = now - 200 * 60 * 60 * 1000;
-        const startTime4h = now - 200 * 4 * 60 * 60 * 1000;
-        const [candles1h, candles4h, fundingHist, oiHist, mvrvHist] = await Promise.all([
+        const startTime5m = now - 200 * 5 * 60 * 1000; // 200 velas 5m
+        const startTime1h = now - 200 * 60 * 60 * 1000; // 200 velas 1h
+        const [candles5m, candles1h, fundingHist, oiHist, mvrvHist] = await Promise.all([
+            fetchHistoricalCandlesPaged(symbol, '5m', startTime5m, now, 200),
             fetchHistoricalCandlesPaged(symbol, '1h', startTime1h, now, 200),
-            fetchHistoricalCandlesPaged(symbol, '4h', startTime4h, now, 200),
-            fetchHistoricalFunding(symbol, startTime1h, now),
-            fetchHistoricalOI(symbol, startTime1h, now),
-            fetchHistoricalMVRV(new Date(startTime1h).toISOString().slice(0,10), new Date(now).toISOString().slice(0,10))
+            fetchHistoricalFunding(symbol, startTime5m, now),
+            fetchHistoricalOI(symbol, startTime5m, now),
+            fetchHistoricalMVRV(new Date(startTime5m).toISOString().slice(0,10), new Date(now).toISOString().slice(0,10))
         ]);
 
-        if (candles1h.length < 50) {
+        if (candles5m.length < 50) {
             console.warn(`[Robot] Dados insuficientes para ${symbol}`);
             return null;
         }
 
         const state = {
-            candles1H: [],
-            candles4H: candles4h,
-            ema50_1H: 0,
-            ema200_4H: 0,
-            rsi_1H: 50,
-            atr_1H: 0,
+            candles5M: [],
+            candles1H: candles1h,
+            ema50_5M: 0,
+            ema200_1H: 0,
+            rsi_5M: 50,
+            atr_5M: 0,
             atrHistory: [],
             swingHighs: [],
             swingLows: [],
@@ -1872,7 +1894,7 @@ async function checkSignal(symbol) {
             mtfConfluence: null,
             adx: 0,
             divergence: null,
-            divergence4H: null,
+            divergence1H: null,
             volumeAnomaly: null,
             macroBlackout: false,
             vwap: 0,
@@ -1888,61 +1910,61 @@ async function checkSignal(symbol) {
             volatilityFactor: 1.0
         };
 
-        const lastCandle = candles1h[candles1h.length - 1];
+        const lastCandle = candles5m[candles5m.length - 1];
         state.price = lastCandle.close;
-        state.candles1H = candles1h.slice(-200);
+        state.candles5M = candles5m.slice(-200);
 
         const updateIndicators = (candles, currentTime, bullishVelas, bearishVelas) => {
-            if (candles.length < 14) return;
+            if (candles.length < 10) return;
             const closes = candles.map(c => c.close);
-            state.ema50_1H = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
-            state.atr_1H = calculateATR(candles, 14);
-            state.atrHistory.push(state.atr_1H);
+            state.ema50_5M = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
+            state.atr_5M = calculateATR(candles, 10);
+            state.atrHistory.push(state.atr_5M);
             if (state.atrHistory.length > 100) state.atrHistory.shift();
 
             let avgGain = 0, avgLoss = 0;
-            for (let i = closes.length - 14; i < closes.length; i++) {
+            for (let i = closes.length - 10; i < closes.length; i++) {
                 const diff = closes[i] - closes[i - 1];
                 if (diff > 0) avgGain += diff;
                 else avgLoss += Math.abs(diff);
             }
-            avgGain /= 14;
-            avgLoss /= 14;
-            state.rsi_1H = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+            avgGain /= 10;
+            avgLoss /= 10;
+            state.rsi_5M = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
 
-            const adxData = calculateADX(candles);
+            const adxData = calculateADX(candles, 10);
             state.adx = adxData;
 
-            const last24 = candles.slice(-24);
-            state.vwap = calculateVWAP(last24);
+            const last20 = candles.slice(-20);
+            state.vwap = calculateVWAP(last20);
 
-            const volAnomaly = detectVolumeAnomaly(candles, 20, 2.0);
+            const volAnomaly = detectVolumeAnomaly(candles, 14, 1.5);
             state.volumeAnomaly = volAnomaly;
 
             updateSwingPoints(state);
 
-            const relevant4H = state.candles4H.filter(c => c.time <= currentTime);
-            if (relevant4H.length >= 20) {
-                state.htfStructure = detectHTFStructure(relevant4H, bullishVelas, bearishVelas);
+            const relevant1H = state.candles1H.filter(c => c.time <= currentTime);
+            if (relevant1H.length >= 20) {
+                state.htfStructure = detectHTFStructure(relevant1H, bullishVelas, bearishVelas);
             }
 
             let rsiForDiv = [];
             let g = 0, l = 0;
             for (let i = 1; i < closes.length; i++) {
                 const d = closes[i] - closes[i - 1];
-                if (i <= 14) {
+                if (i <= 10) {
                     if (d >= 0) g += d;
                     else l -= d;
-                    if (i === 14) {
-                        let ag = g / 14, al = l / 14;
+                    if (i === 10) {
+                        let ag = g / 10, al = l / 10;
                         rsiForDiv.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                     }
                 } else {
                     const gain = d > 0 ? d : 0;
                     const loss = d < 0 ? -d : 0;
                     const prevR = rsiForDiv[rsiForDiv.length - 1];
-                    const ag = (prevR * 13 + gain) / 14;
-                    const al = (prevR * 13 + loss) / 14;
+                    const ag = (prevR * 9 + gain) / 10;
+                    const al = (prevR * 9 + loss) / 10;
                     rsiForDiv.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                 }
             }
@@ -1951,31 +1973,31 @@ async function checkSignal(symbol) {
                 state.divergence = div;
             }
 
-            if (relevant4H.length >= 30) {
-                const closes4H = relevant4H.map(c => c.close);
-                let rsi4H = [];
-                let g4 = 0, l4 = 0;
-                for (let i = 1; i < closes4H.length; i++) {
-                    const d = closes4H[i] - closes4H[i-1];
-                    if (i <= 14) {
-                        if (d >= 0) g4 += d;
-                        else l4 -= d;
-                        if (i === 14) {
-                            let ag = g4 / 14, al = l4 / 14;
-                            rsi4H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+            if (relevant1H.length >= 25) {
+                const closes1H = relevant1H.map(c => c.close);
+                let rsi1H = [];
+                let g1 = 0, l1 = 0;
+                for (let i = 1; i < closes1H.length; i++) {
+                    const d = closes1H[i] - closes1H[i-1];
+                    if (i <= 10) {
+                        if (d >= 0) g1 += d;
+                        else l1 -= d;
+                        if (i === 10) {
+                            let ag = g1 / 10, al = l1 / 10;
+                            rsi1H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                         }
                     } else {
                         const gain = d > 0 ? d : 0;
                         const loss = d < 0 ? -d : 0;
-                        const prevR = rsi4H[rsi4H.length - 1];
-                        const ag = (prevR * 13 + gain) / 14;
-                        const al = (prevR * 13 + loss) / 14;
-                        rsi4H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+                        const prevR = rsi1H[rsi1H.length - 1];
+                        const ag = (prevR * 9 + gain) / 10;
+                        const al = (prevR * 9 + loss) / 10;
+                        rsi1H.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
                     }
                 }
-                if (rsi4H.length > 20) {
-                    const div4H = detectRSIDivergence(relevant4H, rsi4H);
-                    state.divergence4H = div4H;
+                if (rsi1H.length > 20) {
+                    const div1H = detectRSIDivergence(relevant1H, rsi1H);
+                    state.divergence1H = div1H;
                 }
             }
 
@@ -1989,9 +2011,9 @@ async function checkSignal(symbol) {
         };
 
         const getMTFAlignmentAtTime = (currentTime) => {
+            const relevant5M = state.candles5M.filter(c => c.time <= currentTime).slice(-50);
             const relevant1H = state.candles1H.filter(c => c.time <= currentTime).slice(-50);
-            const relevant4H = state.candles4H.filter(c => c.time <= currentTime).slice(-50);
-            if (relevant1H.length < 20 || relevant4H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
+            if (relevant5M.length < 20 || relevant1H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
             
             const getDir = (candles) => {
                 if (candles.length < 20) return 'NEUTRO';
@@ -2010,14 +2032,14 @@ async function checkSignal(symbol) {
                 if (isBear && slopeDown) return 'BEAR';
                 return 'NEUTRO';
             };
+            const dir5M = getDir(relevant5M);
             const dir1H = getDir(relevant1H);
-            const dir4H = getDir(relevant4H);
-            const bulls = [dir1H, dir4H].filter(d => d === 'BULL').length;
-            const bears = [dir1H, dir4H].filter(d => d === 'BEAR').length;
+            const bulls = [dir5M, dir1H].filter(d => d === 'BULL').length;
+            const bears = [dir5M, dir1H].filter(d => d === 'BEAR').length;
             const alinhadoForte = bulls === 2 || bears === 2;
-            const alinhadoParcial = (dir4H === 'BULL' && dir1H !== 'BEAR') || (dir4H === 'BEAR' && dir1H !== 'BULL');
+            const alinhadoParcial = (dir1H === 'BULL' && dir5M !== 'BEAR') || (dir1H === 'BEAR' && dir5M !== 'BULL');
             return {
-                directions: [{ tf: '1h', dir: dir1H }, { tf: '4h', dir: dir4H }],
+                directions: [{ tf: '5m', dir: dir5M }, { tf: '1h', dir: dir1H }],
                 score: bulls - bears,
                 alinhado: alinhadoForte,
                 alinhadoParcial: alinhadoParcial
@@ -2038,46 +2060,47 @@ async function checkSignal(symbol) {
         state.mtfConfluence = getMTFAlignmentAtTime(lastCandle.time);
 
         const params = {
-            scoreMin: parseFloat(document.getElementById('scoreMin').value),
-            scoreMaxShort: parseFloat(document.getElementById('scoreMaxShort').value),
-            adxMin: parseFloat(document.getElementById('adxMin').value),
-            rrMin: parseFloat(document.getElementById('rrMin').value),
-            retestDistPct: parseFloat(document.getElementById('retestDist').value),
+            scoreMin: parseFloat(document.getElementById('scoreMin').value) || 51,
+            scoreMaxShort: parseFloat(document.getElementById('scoreMaxShort').value) || 49,
+            adxMin: parseFloat(document.getElementById('adxMin').value) || 12,
+            rrMin: parseFloat(document.getElementById('rrMin').value) || 1.0,
+            retestDistPct: parseFloat(document.getElementById('retestDist').value) || 2.5,
             emaRetest: document.getElementById('emaRetest').checked,
             requireMTF: document.getElementById('requireMTF').checked,
             requireBOS: document.getElementById('requireBOS').checked,
             requireRetest: document.getElementById('requireRetest').checked,
             requireSweep: document.getElementById('requireSweep').checked,
-            maxHoldHours: parseFloat(document.getElementById('maxHoldHours').value),
-            htfBullishVelas: parseInt(document.getElementById('htfBullishVelas').value),
-            diDiffMinLong: parseFloat(document.getElementById('diDiffMinLong').value),
-            mvrvDropPercent: parseFloat(document.getElementById('mvrvDropPercent').value) / 100,
-            htfBearishVelas: parseInt(document.getElementById('htfBearishVelas').value),
-            diDiffMinShort: parseFloat(document.getElementById('diDiffMinShort').value),
-            stopLong: parseFloat(document.getElementById('stopLong').value),
-            stopShort: parseFloat(document.getElementById('stopShort').value),
-            tp1Long: parseFloat(document.getElementById('tp1Long').value),
-            tp1Short: parseFloat(document.getElementById('tp1Short').value),
-            tp2Dist: parseFloat(document.getElementById('tp2Dist').value),
-            trailLong: parseFloat(document.getElementById('trailLong').value),
-            trailShort: parseFloat(document.getElementById('trailShort').value),
-            tp1Pct: parseFloat(document.getElementById('tp1Pct').value) / 100,
-            tp2Pct: parseFloat(document.getElementById('tp2Pct').value) / 100,
-            runnerPct: parseFloat(document.getElementById('runnerPct').value) / 100
+            maxHoldHours: parseFloat(document.getElementById('maxHoldHours').value) || 72,
+            htfBullishVelas: parseInt(document.getElementById('htfBullishVelas').value) || 2,
+            diDiffMinLong: parseFloat(document.getElementById('diDiffMinLong').value) || 0,
+            mvrvDropPercent: parseFloat(document.getElementById('mvrvDropPercent').value) / 100 || 0.25,
+            htfBearishVelas: parseInt(document.getElementById('htfBearishVelas').value) || 2,
+            diDiffMinShort: parseFloat(document.getElementById('diDiffMinShort').value) || 8,
+            stopLong: parseFloat(document.getElementById('stopLong').value) || 0.8,
+            stopShort: parseFloat(document.getElementById('stopShort').value) || 0.8,
+            tp1Long: parseFloat(document.getElementById('tp1Long').value) || 1.5,
+            tp1Short: parseFloat(document.getElementById('tp1Short').value) || 1.5,
+            tp2Dist: parseFloat(document.getElementById('tp2Dist').value) || 2.5,
+            trailLong: parseFloat(document.getElementById('trailLong').value) || 0.5,
+            trailShort: parseFloat(document.getElementById('trailShort').value) || 0.5,
+            tp1Pct: parseFloat(document.getElementById('tp1Pct').value) / 100 || 0.7,
+            tp2Pct: parseFloat(document.getElementById('tp2Pct').value) / 100 || 0.0,
+            runnerPct: parseFloat(document.getElementById('runnerPct').value) / 100 || 0.3,
+            dojiThreshold: parseFloat(document.getElementById('dojiThreshold').value) || 0.15
         };
 
-        updateIndicators(state.candles1H, lastCandle.time, params.htfBullishVelas, params.htfBearishVelas);
+        updateIndicators(state.candles5M, lastCandle.time, params.htfBullishVelas, params.htfBearishVelas);
 
         let blockReason = null;
         const adxVal = typeof state.adx === 'object' ? state.adx.adx : state.adx;
         const scoreData = computeScore(symbol, { [symbol]: {
             price: state.price,
+            candles5M: state.candles5M,
             candles1H: state.candles1H,
-            candles4H: state.candles4H,
-            ema50_1H: state.ema50_1H,
-            ema200_4H: state.ema200_4H,
-            rsi_1H: state.rsi_1H,
-            atr_1H: state.atr_1H,
+            ema50_5M: state.ema50_5M,
+            ema200_1H: state.ema200_1H,
+            rsi_5M: state.rsi_5M,
+            atr_5M: state.atr_5M,
             atrHistory: state.atrHistory,
             swingHighs: state.swingHighs,
             swingLows: state.swingLows,
@@ -2110,10 +2133,10 @@ async function checkSignal(symbol) {
         }
 
         if (direction === 'LONG' && !blockReason && state.htfStructure.bias === 'BEARISH') {
-            blockReason = `HTF 4H Bearish (${params.htfBullishVelas} velas bullish necessárias)`;
+            blockReason = `HTF 1H Bearish (${params.htfBullishVelas} velas bullish necessárias)`;
         }
         if (direction === 'SHORT' && !blockReason && state.htfStructure.bias === 'BULLISH') {
-            blockReason = `HTF 4H Bullish (${params.htfBearishVelas} velas bearish necessárias)`;
+            blockReason = `HTF 1H Bullish (${params.htfBearishVelas} velas bearish necessárias)`;
         }
 
         if (direction === 'LONG' && !blockReason) {
@@ -2127,6 +2150,28 @@ async function checkSignal(symbol) {
             }
         }
 
+        // Filtro de mercado lateral (ADX + Bandwidth)
+        const closes = state.candles5M.slice(-20).map(c => c.close);
+        if (closes.length >= 20) {
+            const sma = closes.reduce((a,b) => a+b, 0) / 20;
+            const variance = closes.reduce((s, v) => s + (v-sma)**2, 0) / 20;
+            const stdBB = Math.sqrt(variance);
+            const bandwidth = (2 * stdBB) / sma;
+            state.bandwidthHistory.push(bandwidth);
+            if (state.bandwidthHistory.length >= 10) {
+                const avgBW = state.bandwidthHistory.slice(-10).reduce((a,b) => a+b, 0) / 10;
+                const bwPass = bandwidth >= avgBW * 0.25;
+                const rangePass = (adxVal >= 15) || (bandwidth >= avgBW * 0.35);
+                if (!bwPass || !rangePass) {
+                    blockReason = 'Mercado lateral (ADX/BW)';
+                }
+            }
+        }
+
+        // Funding e OI Z-score (já aplicados no backtest, mas replicamos aqui)
+        // ... (código de funding e oi pode ser adicionado se necessário, mas já foi aplicado no loop)
+
+        // SMC
         const recentHighs = state.swingHighs.slice(-3);
         const recentLows = state.swingLows.slice(-3);
         let smcSetup = false, retestConfirmed = false;
@@ -2136,7 +2181,7 @@ async function checkSignal(symbol) {
             if (brokenHighs.length > 0) {
                 brokenLevel = Math.max(...brokenHighs);
                 smcSetup = true;
-                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_1H || state.price*0.01);
+                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || state.price*0.01);
                 retestConfirmed = distInAtr < params.retestDistPct;
             }
         } else if (direction === 'SHORT') {
@@ -2144,13 +2189,13 @@ async function checkSignal(symbol) {
             if (brokenLows.length > 0) {
                 brokenLevel = Math.min(...brokenLows);
                 smcSetup = true;
-                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_1H || state.price*0.01);
+                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || state.price*0.01);
                 retestConfirmed = distInAtr < params.retestDistPct;
             }
         }
         if (!retestConfirmed && params.emaRetest) {
-            const ema20 = calcEMA(state.candles1H.map(c => c.close), 20).slice(-1)[0] || state.price;
-            const emaDist = Math.abs(state.price - ema20) / (state.atr_1H || state.price*0.01);
+            const ema20 = calcEMA(state.candles5M.map(c => c.close), 20).slice(-1)[0] || state.price;
+            const emaDist = Math.abs(state.price - ema20) / (state.atr_5M || state.price*0.01);
             retestConfirmed = emaDist < 0.5;
             if (retestConfirmed) smcSetup = true;
         }
@@ -2187,8 +2232,11 @@ async function checkSignal(symbol) {
         }
 
         if (!blockReason && smcSetup) {
-            const volumeAvg = state.candles1H.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-            const volumeOk = state.candles1H[state.candles1H.length - 1].volume >= volumeAvg * 1.3;
+            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a - b);
+            const p25 = volumes[Math.floor(0.25 * volumes.length)] || 0;
+            const avgVol = state.candles5M.slice(-14).reduce((s, c) => s + c.volume, 0) / 14;
+            const volumeOk = state.candles5M[state.candles5M.length - 1].volume >= p25 &&
+                             state.candles5M[state.candles5M.length - 1].volume >= avgVol * 1.3;
             const closeBreakOk = (direction === 'LONG' && lastCandle.close > brokenLevel) ||
                                  (direction === 'SHORT' && lastCandle.close < brokenLevel);
             if (!volumeOk) blockReason = 'Volume insuficiente';
@@ -2197,7 +2245,7 @@ async function checkSignal(symbol) {
 
         const body = Math.abs(lastCandle.close - lastCandle.open);
         const range = lastCandle.high - lastCandle.low;
-        if (range > 0 && body / range < 0.5 && !blockReason) {
+        if (range > 0 && body / range < params.dojiThreshold && !blockReason) {
             blockReason = 'Corpo fraco (doji)';
         }
 
@@ -2206,7 +2254,7 @@ async function checkSignal(symbol) {
             return null;
         }
 
-        const atr = state.atr_1H || state.price * 0.02;
+        const atr = state.atr_5M || state.price * 0.02;
         const volatilityAtr = atr * (1 + state.volatilityFactor * 0.5);
         let stop, tp1, tp2;
         if (direction === 'LONG') {
@@ -2231,8 +2279,11 @@ async function checkSignal(symbol) {
         } else {
             rr = (state.price - tp1) / (stop - state.price);
         }
-        if (rr < params.rrMin) {
-            console.log(`[Robot] ${symbol} R:R ${rr.toFixed(2)} < ${params.rrMin}`);
+        // R:R adaptativo
+        const stopDistAtr = (direction === 'LONG') ? (state.price - stop) / state.atr_5M : (stop - state.price) / state.atr_5M;
+        const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : params.rrMin;
+        if (rr < rrMinEffective) {
+            console.log(`[Robot] ${symbol} R:R ${rr.toFixed(2)} < ${rrMinEffective}`);
             return null;
         }
 
@@ -2242,12 +2293,21 @@ async function checkSignal(symbol) {
         else if (params.emaRetest && retestConfirmed) rationale = 'EMA Retest';
         else rationale = 'Estrutura SMC';
 
+        // Trailing stop sugerido
+        let trailingStop = null;
+        if (direction === 'LONG' && params.trailLong > 0) {
+            trailingStop = state.price - atr * params.trailLong;
+        } else if (direction === 'SHORT' && params.trailShort > 0) {
+            trailingStop = state.price + atr * params.trailShort;
+        }
+
         return {
             direction,
             entryPrice: state.price,
             stop,
             tp1,
             tp2,
+            trailingStop,
             rr,
             score,
             rationale
@@ -2262,7 +2322,7 @@ async function checkSignal(symbol) {
 async function runRobotCycle() {
     if (!isRobotRunning) return;
 
-    updateRobotLog('🔍 Verificando sinais...');
+    updateRobotLog('🔍 Verificando sinais scalp...');
     for (const symbol of ROBOT_ASSETS) {
         const now = Date.now();
         const lastTime = lastSignalTime[symbol] || 0;
@@ -2284,10 +2344,10 @@ async function startRobot() {
     if (isRobotRunning) return;
     isRobotRunning = true;
     document.getElementById('robotLed').className = 'led on';
-    document.getElementById('robotStatusText').textContent = 'Robô ativo';
+    document.getElementById('robotStatusText').textContent = 'Robô ativo (scalp)';
     document.getElementById('robotToggleBtn').textContent = '⏹️ Parar Robô';
     document.getElementById('robotToggleBtn').classList.add('active');
-    updateRobotLog('🚀 Robô iniciado.');
+    updateRobotLog('🚀 Robô scalp iniciado.');
     await runRobotCycle();
     signalRobotInterval = setInterval(runRobotCycle, 15 * 60 * 1000);
 }
@@ -2301,7 +2361,7 @@ function stopRobot() {
     }
     document.getElementById('robotLed').className = 'led off';
     document.getElementById('robotStatusText').textContent = 'Robô parado';
-    document.getElementById('robotToggleBtn').textContent = '🤖 Iniciar Robô de Sinais';
+    document.getElementById('robotToggleBtn').textContent = '🤖 Iniciar Robô de Sinais (scalp)';
     document.getElementById('robotToggleBtn').classList.remove('active');
     updateRobotLog('⏹️ Robô parado.');
 }
@@ -2362,7 +2422,7 @@ async function testTelegram() {
         const TELEGRAM_TOKEN = '8670184440:AAFBfhFFTMnUWsgIFyRh0huBYbL-Q_vhT5k';
         const TELEGRAM_CHAT_ID = '1137196768';
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-        const message = `🧪 Teste de conexão do Telegram\n⏰ ${new Date().toLocaleString('pt-BR')}\n✅ Mensagem enviada com sucesso!`;
+        const message = `🧪 Teste de conexão do Telegram (SCALP)\n⏰ ${new Date().toLocaleString('pt-BR')}\n✅ Mensagem enviada com sucesso!`;
         const resp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2387,7 +2447,7 @@ async function testTelegram() {
 document.getElementById('telegramTestBtn').addEventListener('click', testTelegram);
 
 // ============================================================
-// ARMAZENAMENTO EM NUVEM (JSONBin)
+// ARMAZENAMENTO EM NUVEM (JSONBin) – mantido
 // ============================================================
 const JSONBIN_MASTER_KEY = '$2a$10$mbH27dVmnT4JyX.5MAbxM.KknNujEyPzfTW1Z2LnkK7Ga6rXqUE4C';
 const JSONBIN_BIN_ID = '6a4c4be6da38895dfe3841c9';
@@ -2538,4 +2598,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('runBtn').addEventListener('click', syncParamsToCloud);
 });
 
-console.log('✅ Módulo backtest_engine.js carregado com sucesso.');
+console.log('✅ Módulo backtest_engine.js (SCALP) carregado com sucesso.');
