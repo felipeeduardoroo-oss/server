@@ -1,5 +1,6 @@
 // ============================================================
-// backtest_engine.js – Motor completo de backtest, UI e robô (SCALP 5M/1H)
+// backtest_engine.js – Motor completo de backtest, UI e robô
+// VERSÃO SCALP 5M/1H (ATR/ADX=10, parâmetros ajustados)
 // ============================================================
 
 // ===== VARIÁVEIS GLOBAIS =====
@@ -16,7 +17,7 @@ let lastParams = null;
 let liveInterval = null;
 
 // ============================================================
-// FUNÇÕES DO INDICADOR (ajustadas para scalp)
+// FUNÇÕES DO INDICADOR (períodos ajustados para 10)
 // ============================================================
 const calcEMA = (data, period) => {
     if (!data || data.length === 0) return [];
@@ -162,18 +163,19 @@ const updateSwingPoints = (state) => {
     const c5 = candles[candles.length - 3];
     const c6 = candles[candles.length - 2];
     const c7 = candles[candles.length - 1];
-    if (c4.high > c1.high && c4.high > c2.high && c4.high > c3.high && 
+    if (c4.high > c1.high && c4.high > c2.high && c4.high > c3.high &&
         c4.high > c5.high && c4.high > c6.high && c4.high > c7.high) {
         state.swingHighs.push(c4.high);
         if (state.swingHighs.length > 20) state.swingHighs.shift();
     }
-    if (c4.low < c1.low && c4.low < c2.low && c4.low < c3.low && 
+    if (c4.low < c1.low && c4.low < c2.low && c4.low < c3.low &&
         c4.low < c5.low && c4.low < c6.low && c4.low < c7.low) {
         state.swingLows.push(c4.low);
         if (state.swingLows.length > 20) state.swingLows.shift();
     }
 };
 
+// HTF agora é 1h (em vez de 4h)
 const detectHTFStructure = (candles1H, bullishVelas = 2, bearishVelas = 2) => {
     if (!candles1H || candles1H.length < 55) return { bias: 'NEUTRAL', lastSwingHigh: 0, lastSwingLow: Infinity };
     const closes = candles1H.map(c => c.close);
@@ -190,7 +192,12 @@ const detectHTFStructure = (candles1H, bullishVelas = 2, bearishVelas = 2) => {
     return { bias, lastSwingHigh: Math.max(...candles1H.map(c => c.high)), lastSwingLow: Math.min(...candles1H.map(c => c.low)) };
 };
 
-const checkLateralMarket = (adxValue, threshold = 15) => adxValue < threshold;
+// Filtro de mercado lateral combinado (ADX + Bandwidth)
+const checkLateralMarket = (adxValue, currentBW, avgBW) => {
+    const bwPass = currentBW >= avgBW * 0.25;
+    const rangePass = (adxValue >= 15) || (currentBW >= avgBW * 0.35);
+    return !(bwPass && rangePass); // retorna true se for lateral (bloqueia)
+};
 
 const checkDerivativesFilter = (fundingRate, oiDelta) => {
     if (fundingRate > 0.0020) return { allow: false, reason: 'Funding extremamente positivo (>0.2%)' };
@@ -234,7 +241,7 @@ const computeScore = (symbol, assetsData, liqMap, adxThreshold) => {
     if (rsi > 75) score -= 15;
     if (rsi < 25) score += 15;
     let clamped = Math.max(0, Math.min(100, score));
-    const isLateral = checkLateralMarket(adxValue, adxThreshold);
+    const isLateral = adxValue < adxThreshold; // simplificado, o filtro lateral é aplicado separadamente
     let blockReason = null;
     if (isLateral) {
         clamped = Math.max(40, Math.min(60, clamped));
@@ -377,7 +384,7 @@ const findMostRecent = (arr, cond) => {
 };
 
 // ============================================================
-// IMPORTAÇÃO / EXPORTAÇÃO DE DADOS (ajustado para 5m/1h)
+// IMPORTAÇÃO / EXPORTAÇÃO DE DADOS (ajustado para 5m e 1h)
 // ============================================================
 async function fetchRawData(symbol = 'BTCUSDT') {
     const days = 1000;
@@ -476,7 +483,7 @@ function importData(files) {
 }
 
 // ============================================================
-// BACKTEST COMPLETO (SCALP 5M/1H)
+// BACKTEST COMPLETO (ajustado para 5m/1h, parâmetros Scalp)
 // ============================================================
 export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     const {
@@ -507,8 +514,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         trailShort = 0.5,
         tp1Pct = 0.7,
         tp2Pct = 0.0,
-        runnerPct = 0.3,
-        dojiThreshold = 0.15
+        runnerPct = 0.3
     } = options;
 
     days = Math.min(days, 1000);
@@ -552,12 +558,21 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         console.log(`Usando dados do cache para ${symbol} (5m=${candles5m.length}, 1h=${candles1h.length}).`);
     }
 
+    if (mvrvHist.length > 0) {
+        const values = mvrvHist.map(m => m.value);
+        console.log('📊 MVRV — min:', Math.min(...values).toFixed(2),
+                    'max:', Math.max(...values).toFixed(2),
+                    'média:', (values.reduce((a,b)=>a+b,0)/values.length).toFixed(2));
+    } else {
+        console.warn('⚠️ Nenhum dado MVRV disponível para diagnóstico.');
+    }
+
     const filteredCandles = candles5m.filter(c => c.time >= startTime && c.time <= endTime);
     console.log(`Filtrados para o período: ${filteredCandles.length} candles 5m`);
 
     const minCandles = (days >= 2) ? 50 : 20;
     if (filteredCandles.length < minCandles) {
-        let msg = `Dados insuficientes: obtidos ${filteredCandles.length} velas 5m, necessário ${minCandles}.`;
+        let msg = `Dados insuficientes: obtidos ${filteredCandles.length} velas 5m no período, necessário ${minCandles}.`;
         if (!needFetch && cachedData.candles5m.length > 0) {
             const lastTime = cachedData.candles5m[cachedData.candles5m.length - 1]?.time;
             if (lastTime) {
@@ -608,9 +623,9 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
     const blockStats = {};
     let totalCandlesProcessed = 0;
 
-    // ----- UPDATE INDICADORES (para 5m/1h) -----
+    // ----- UPDATE INDICADORES (5m) -----
     const updateIndicators = (candles, currentTime, bullishVelas, bearishVelas) => {
-        if (candles.length < 10) return;
+        if (candles.length < 14) return;
         const closes = candles.map(c => c.close);
         state.ema50_5M = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
         state.atr_5M = calculateATR(candles, 10);
@@ -705,12 +720,12 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         }
     };
 
-    // ----- MTF (1H e 4H? apenas 1H como superior) -----
+    // ----- MTF (1h e 5m) -----
     const getMTFAlignmentAtTime = (currentTime) => {
         const relevant5M = state.candles5M.filter(c => c.time <= currentTime).slice(-50);
         const relevant1H = state.candles1H.filter(c => c.time <= currentTime).slice(-50);
         if (relevant5M.length < 20 || relevant1H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
-        
+
         const getDir = (candles) => {
             if (candles.length < 20) return 'NEUTRO';
             const closes = candles.map(c => c.close);
@@ -742,7 +757,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         };
     };
 
-    // ===== LOOP PRINCIPAL =====
+    // ===== LOOP PRINCIPAL (sobre candles 5m) =====
     for (let i = 0; i < filteredCandles.length; i++) {
         const candle = filteredCandles[i];
         state.price = candle.close;
@@ -779,9 +794,9 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             continue;
         }
 
-        // ----- FILTROS (SCALP) -----
+        // ----- FILTROS -----
 
-        // 1. Bandwidth + Mercado Lateral (ADX + Bandwidth)
+        // 1. Bandwidth + Mercado Lateral
         const closes = state.candles5M.slice(-20).map(c => c.close);
         if (closes.length >= 20) {
             const sma = closes.reduce((a,b) => a+b, 0) / 20;
@@ -793,9 +808,8 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             if (state.bandwidthHistory.length >= 10) {
                 const avgBW = state.bandwidthHistory.slice(-10).reduce((a,b) => a+b, 0) / 10;
                 const adxVal = typeof state.adx === 'object' ? state.adx.adx : state.adx;
-                const bwPass = bandwidth >= avgBW * 0.25;
-                const rangePass = (adxVal >= 15) || (bandwidth >= avgBW * 0.35);
-                if (!bwPass || !rangePass) {
+                // Filtro lateral: bloqueia se bandwidth < 25% da média E (ADX < 15 E bandwidth < 35% da média)
+                if (bandwidth < avgBW * 0.25 || (adxVal < 15 && bandwidth < avgBW * 0.35)) {
                     blockStats['mercado_lateral'] = (blockStats['mercado_lateral'] || 0) + 1;
                     continue;
                 }
@@ -826,6 +840,17 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
         }
 
+        // 4. MVRV (SHORT)
+        if (state.mvrvHistory.length > 0) {
+            const mvrvPeak90d = Math.max(...state.mvrvHistory);
+            const mvrvDrop = mvrvPeak90d > 0 ? (mvrvPeak90d - state.mvrv) / mvrvPeak90d : 0;
+            if (mvrvDrop > mvrvDropPercent) {
+                blockStats['MVRV_caiu'] = (blockStats['MVRV_caiu'] || 0) + 1;
+                continue;
+            }
+        }
+
+        // 5. Score e direção
         const simAssets = {
             [symbol]: {
                 price: state.price,
@@ -857,70 +882,138 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
         let score = scoreData.score;
         let direction = scoreData.direction;
         let blockReason = scoreData.blockReason;
-        const primaryDirection = (score >= scoreMin) ? 'LONG' : (score <= scoreMaxShort ? 'SHORT' : null);
 
-        if (state.mvrvHistory.length > 0 && primaryDirection === 'SHORT' && !blockReason) {
-            const mvrvPeak90d = Math.max(...state.mvrvHistory);
-            const mvrvDrop = mvrvPeak90d > 0 ? (mvrvPeak90d - state.mvrv) / mvrvPeak90d : 0;
-            if (mvrvDrop > mvrvDropPercent) {
-                blockReason = `MVRV caiu ${(mvrvDrop*100).toFixed(1)}% do pico de 90d (limite ${(mvrvDropPercent*100).toFixed(0)}%)`;
-            }
+        // Filtros de direção
+        if (direction === 'LONG' && score < scoreMin) {
+            blockReason = `Score ${score} < ${scoreMin}`;
+        } else if (direction === 'SHORT' && score > scoreMaxShort) {
+            blockReason = `Score ${score} > ${scoreMaxShort}`;
         }
 
-        if (primaryDirection === 'LONG' && !blockReason && state.htfStructure.bias === 'BEARISH') {
+        // HTF
+        if (direction === 'LONG' && !blockReason && state.htfStructure.bias === 'BEARISH') {
             blockReason = `HTF 1H Bearish (${htfBullishVelas} velas bullish necessárias)`;
         }
-        if (primaryDirection === 'SHORT' && !blockReason && state.htfStructure.bias === 'BULLISH') {
+        if (direction === 'SHORT' && !blockReason && state.htfStructure.bias === 'BULLISH') {
             blockReason = `HTF 1H Bullish (${htfBearishVelas} velas bearish necessárias)`;
         }
 
-        if (primaryDirection === 'LONG' && !blockReason) {
+        // DI diff
+        if (direction === 'LONG' && !blockReason) {
             if ((state.adx.plusDI - state.adx.minusDI) < diDiffMinLong) {
                 blockReason = `Momentum bullish insuficiente (DI+ - DI- < ${diDiffMinLong})`;
             }
         }
-
-        if (primaryDirection === 'SHORT' && !blockReason) {
+        if (direction === 'SHORT' && !blockReason) {
             if ((state.adx.minusDI - state.adx.plusDI) < diDiffMinShort) {
                 blockReason = `Momentum bearish insuficiente (DI- - DI+ < ${diDiffMinShort})`;
             }
         }
 
-        const prevCandle = state.candles5M.length > 1 ? state.candles5M[state.candles5M.length - 2] : null;
-        const lastSwingHigh = state.swingHighs.length > 0 ? state.swingHighs[state.swingHighs.length - 1] : null;
-        const lastSwingLow = state.swingLows.length > 0 ? state.swingLows[state.swingLows.length - 1] : null;
-        const refHigh = lastSwingHigh || (prevCandle ? prevCandle.high : null);
-        const refLow = lastSwingLow || (prevCandle ? prevCandle.low : null);
-        
-        const bosBull = primaryDirection === 'LONG' && refHigh !== null && candle.close > refHigh;
-        const bosBear = primaryDirection === 'SHORT' && refLow !== null && candle.close < refLow;
-        state.currentBOS = (bosBull || bosBear) ? 'BOS' : 'NEUTRAL';
-
-        const adxValNow = typeof state.adx === 'object' ? state.adx.adx : state.adx;
-        state.adxRolling.push(adxValNow);
-        if (state.adxRolling.length > 50) state.adxRolling.shift();
-
-        // ADX dinâmico (desativado para scalp, mas mantido como referência)
-        // Não bloqueia, apenas registra
-
-        if (adxValNow < adxMin && !blockReason) blockReason = `ADX < ${adxMin}`;
-        if (state.macroBlackout && !blockReason) blockReason = 'Macro blackout';
-
-        if (primaryDirection === 'LONG' && (state.adx.plusDI - state.adx.minusDI) < 0 && !blockReason) {
-            blockReason = 'DI- > DI+ (Força Bearish)';
-        }
-
-        if (primaryDirection === 'LONG' && state.price < state.vwap && !blockReason)
+        // VWAP
+        if (direction === 'LONG' && state.price < state.vwap && !blockReason)
             blockReason = 'Preço abaixo do VWAP';
-        else if (primaryDirection === 'SHORT' && state.price > state.vwap && !blockReason)
+        else if (direction === 'SHORT' && state.price > state.vwap && !blockReason)
             blockReason = 'Preço acima do VWAP';
 
+        // Derivativos
         if (!blockReason) {
             const derivCheck = checkDerivativesFilter(state.fundingRate, state.oiDelta);
             if (!derivCheck.allow) blockReason = derivCheck.reason;
         }
 
-        // ----- GESTÃO DE POSIÇÃO (mantida similar, com trailing ajustado) -----
+        // SMC: BOS/Sweep + Retest + Volume
+        const prevCandle = state.candles5M.length > 1 ? state.candles5M[state.candles5M.length - 2] : null;
+        const lastSwingHigh = state.swingHighs.length > 0 ? state.swingHighs[state.swingHighs.length - 1] : null;
+        const lastSwingLow = state.swingLows.length > 0 ? state.swingLows[state.swingLows.length - 1] : null;
+        const refHigh = lastSwingHigh || (prevCandle ? prevCandle.high : null);
+        const refLow = lastSwingLow || (prevCandle ? prevCandle.low : null);
+
+        let smcSetup = false, sweepSetup = false, retestConfirmed = false;
+        let brokenLevel = null;
+        const recentHighs = state.swingHighs.slice(-3);
+        const recentLows = state.swingLows.slice(-3);
+
+        if (direction === 'LONG') {
+            const brokenHighs = recentHighs.filter(h => h < state.price);
+            if (brokenHighs.length > 0) {
+                brokenLevel = Math.max(...brokenHighs);
+                smcSetup = true;
+                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || state.price * 0.01);
+                retestConfirmed = distInAtr < retestDistPct;
+            }
+        } else if (direction === 'SHORT') {
+            const brokenLows = recentLows.filter(l => l > state.price);
+            if (brokenLows.length > 0) {
+                brokenLevel = Math.min(...brokenLows);
+                smcSetup = true;
+                const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || state.price * 0.01);
+                retestConfirmed = distInAtr < retestDistPct;
+            }
+        }
+
+        if (!retestConfirmed && emaRetest) {
+            const ema20 = calcEMA(state.candles5M.map(c => c.close), 20).slice(-1)[0] || state.price;
+            const emaDist = Math.abs(state.price - ema20) / (state.atr_5M || state.price * 0.01);
+            retestConfirmed = emaDist < 0.5;
+            if (retestConfirmed) smcSetup = true;
+        }
+
+        if (requireSweep) {
+            if (direction === 'SHORT' && lastSwingHigh !== null) {
+                const wickAbove = candle.high > lastSwingHigh;
+                const closeBelow = candle.close < lastSwingHigh;
+                const strongBearBody = candle.close < candle.open;
+                if (wickAbove && closeBelow && strongBearBody) {
+                    sweepSetup = true;
+                    retestConfirmed = true;
+                    brokenLevel = lastSwingHigh;
+                }
+            } else if (direction === 'LONG' && lastSwingLow !== null) {
+                const wickBelow = candle.low < lastSwingLow;
+                const closeAbove = candle.close > lastSwingLow;
+                const strongBullBody = candle.close > candle.open;
+                if (wickBelow && closeAbove && strongBullBody) {
+                    sweepSetup = true;
+                    retestConfirmed = true;
+                    brokenLevel = lastSwingLow;
+                }
+            }
+        }
+
+        const bosRequired = !ignoreBOS;
+        const retestRequired = !ignoreRetest;
+        const bosPassed = bosRequired ? smcSetup : true;
+        const retestPassed = retestRequired ? retestConfirmed : true;
+        const structureOk = (bosPassed && retestPassed) || (sweepSetup && retestPassed);
+
+        if (!structureOk && !blockReason) {
+            blockReason = 'Estrutura SMC não confirmada (BOS/Retest)';
+        }
+
+        if (!blockReason && smcSetup) {
+            // Volume por percentil 25 + 1.3x média
+            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a-b);
+            const p25 = volumes[Math.floor(0.25 * volumes.length)] || 0;
+            const avgVol = state.candles5M.slice(-14).reduce((s, c) => s + c.volume, 0) / 14;
+            const volumeOk = state.candles5M[state.candles5M.length - 1].volume >= p25 &&
+                             state.candles5M[state.candles5M.length - 1].volume >= avgVol * 1.3;
+            const closeBreakOk = (direction === 'LONG' && candle.close > brokenLevel) ||
+                                 (direction === 'SHORT' && candle.close < brokenLevel);
+            if (!volumeOk) blockReason = 'Volume insuficiente';
+            else if (!closeBreakOk) blockReason = 'Fechamento fraco';
+        }
+
+        // Doji (threshold 0.15)
+        const body = Math.abs(candle.close - candle.open);
+        const range = candle.high - candle.low;
+        if (range > 0 && body / range < 0.15 && !blockReason) {
+            blockReason = 'Corpo fraco (doji)';
+        }
+
+        totalCandlesProcessed++;
+
+        // ----- GESTÃO DE POSIÇÃO -----
         if (position) {
             const high = candle.high, low = candle.low;
             let closed = false, exitPrice = 0, reason = '';
@@ -1018,10 +1111,10 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
                 const pnlUsd = invested * (pnlPct / 100);
                 equity += pnlUsd;
                 if (equity > highWaterMark) highWaterMark = equity;
-                
+
                 const totalPnlUsd = pnlUsd + (position.partialPnlUsd || 0);
                 const totalPnlPct = (pnlPct * position.sizeRemaining) + (position.partialPnlPct || 0);
-                
+
                 trades.push({
                     entryTime: new Date(position.entryTime).toISOString(),
                     exitTime: new Date(candle.time).toISOString(),
@@ -1042,172 +1135,71 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
             }
         }
 
-        // ----- ENTRADA (SCALP) -----
-        if (!position && !blockReason && primaryDirection) {
+        // ----- ENTRADA -----
+        if (!position && !blockReason && direction) {
             const atr = state.atr_5M || (state.price * 0.02);
-            let smcSetup = false, sweepSetup = false, retestConfirmed = false, brokenLevel = null;
-            const recentHighs = state.swingHighs.slice(-3);
-            const recentLows = state.swingLows.slice(-3);
+            let stop, tp1, tp2;
+            const volatilityAtr = atr * (1 + state.volatilityFactor * 0.5);
 
-            const retestDistPctEffective = primaryDirection === 'SHORT' ? retestDistPct * 0.6 : retestDistPct;
-
-            if (primaryDirection === 'LONG') {
-                const brokenHighs = recentHighs.filter(h => h < state.price);
-                if (brokenHighs.length > 0) {
-                    brokenLevel = Math.max(...brokenHighs);
-                    smcSetup = true;
-                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || (state.price * 0.01));
-                    retestConfirmed = distInAtr < retestDistPctEffective;
-                }
+            // Stop baseado em estrutura ou ATR
+            if (direction === 'LONG') {
+                const recentLows = state.swingLows.slice(-3);
+                const structLevel = (recentLows.length ? Math.min(...recentLows) : state.price * 0.98) - (atr * 0.3);
+                const atrStop = state.price - atr * stopLong;
+                stop = (recentLows.length && (state.price - structLevel) <= atr * 2.5) ? structLevel : atrStop;
+                tp1 = state.price + (volatilityAtr * tp1Long);
+                tp2 = state.price + (volatilityAtr * tp2Dist);
             } else {
-                const brokenLows = recentLows.filter(l => l > state.price);
-                if (brokenLows.length > 0) {
-                    brokenLevel = Math.min(...brokenLows);
-                    smcSetup = true;
-                    const distInAtr = Math.abs(state.price - brokenLevel) / (state.atr_5M || (state.price * 0.01));
-                    retestConfirmed = distInAtr < retestDistPctEffective;
-                }
+                const recentHighs = state.swingHighs.slice(-3);
+                const structLevel = (recentHighs.length ? Math.max(...recentHighs) : state.price * 1.02) + (atr * 0.3);
+                const atrStop = state.price + atr * stopShort;
+                stop = (recentHighs.length && (structLevel - state.price) <= atr * 2.5) ? structLevel : atrStop;
+                tp1 = state.price - (volatilityAtr * tp1Short);
+                tp2 = state.price - (volatilityAtr * tp2Dist);
             }
 
-            if (!retestConfirmed && emaRetest) {
-                const ema20 = calcEMA(state.candles5M.map(c => c.close), 20).slice(-1)[0] || state.price;
-                const emaDist = Math.abs(state.price - ema20) / (state.atr_5M || (state.price * 0.01));
-                retestConfirmed = emaDist < 0.5;
-                if (retestConfirmed) smcSetup = true;
+            // R:R adaptativo (se stop < 0.8 ATR, reduz mínimo para 0.7)
+            const stopDistAtr = (direction === 'LONG') ? (state.price - stop) / atr : (stop - state.price) / atr;
+            const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : rrMin;
+
+            let rr;
+            if (direction === 'LONG') {
+                rr = (tp1 - state.price) / (state.price - stop);
+            } else {
+                rr = (state.price - tp1) / (stop - state.price);
             }
 
-            if (requireSweep) {
-                const lastSwingHigh = state.swingHighs.length > 0 ? state.swingHighs[state.swingHighs.length - 1] : null;
-                const lastSwingLow = state.swingLows.length > 0 ? state.swingLows[state.swingLows.length - 1] : null;
+            if (rr < rrMinEffective) continue;
 
-                if (primaryDirection === 'SHORT' && lastSwingHigh !== null) {
-                    const wickAbove = candle.high > lastSwingHigh;
-                    const closeBelow = candle.close < lastSwingHigh;
-                    const strongBearBody = candle.close < candle.open;
-                    if (wickAbove && closeBelow && strongBearBody) {
-                        sweepSetup = true;
-                        brokenLevel = lastSwingHigh;
-                        retestConfirmed = true;
-                    }
-                } else if (primaryDirection === 'LONG' && lastSwingLow !== null) {
-                    const wickBelow = candle.low < lastSwingLow;
-                    const closeAbove = candle.close > lastSwingLow;
-                    const strongBullBody = candle.close > candle.open;
-                    if (wickBelow && closeAbove && strongBullBody) {
-                        sweepSetup = true;
-                        brokenLevel = lastSwingLow;
-                        retestConfirmed = true;
-                    }
-                }
-            }
+            // Kelly
+            const totalTrades = winCount + lossCount;
+            const winRate = totalTrades > 0 ? winCount / totalTrades : 0.5;
+            const kellyPct = KellyPositionSize(winRate, rr);
+            const riskFraction = Math.min(kellyPct, 0.05);
+            const stopDistancePct = direction === 'LONG' ? (state.price - stop) / state.price : (stop - state.price) / state.price;
+            const positionSizeUSD = (riskFraction * equity) / stopDistancePct;
+            const sizeMultiplier = Math.min(positionSizeUSD / equity, 1.0);
 
-            const bosRequired = !ignoreBOS;
-            const retestRequired = !ignoreRetest;
-            const bosPassed = bosRequired ? smcSetup : true;
-            const retestPassed = retestRequired ? retestConfirmed : true;
-            const structureOk = (bosPassed && retestPassed) || (sweepSetup && retestPassed);
+            position = {
+                type: direction,
+                entryPrice: state.price,
+                stop: stop,
+                tp1: tp1,
+                tp2: tp2,
+                trailingStop: stop,
+                partialTaken: false,
+                tp2Taken: false,
+                sizeRemaining: sizeMultiplier,
+                partialPnlUsd: 0,
+                partialPnlPct: 0,
+                maxProfitPrice: state.price,
+                entryTime: candle.time
+            };
+        }
 
-            // Volume: percentil 25 + média*1.3
-            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a - b);
-            const p25 = volumes[Math.floor(0.25 * volumes.length)] || 0;
-            const avgVol = state.candles5M.slice(-14).reduce((s, c) => s + c.volume, 0) / 14;
-            const volumeOk = smcSetup ? (state.candles5M[state.candles5M.length - 1].volume >= p25 &&
-                                         state.candles5M[state.candles5M.length - 1].volume >= avgVol * 1.3) : true;
-            const closeBreakOk = (primaryDirection === 'LONG' && candle.close > brokenLevel) ||
-                                 (primaryDirection === 'SHORT' && candle.close < brokenLevel);
-            if ((smcSetup && !volumeOk) || (smcSetup && !closeBreakOk)) {
-                blockReason = 'volume_insuficiente_ou_fechamento_fraco';
-            }
-
-            const body = Math.abs(candle.close - candle.open);
-            const range = candle.high - candle.low;
-            if (range > 0 && body / range < dojiThreshold) {
-                blockReason = 'corpo_fraco_doji';
-            }
-
-            totalCandlesProcessed++;
-            let reasonKey = blockReason;
-            if (!blockReason && primaryDirection) {
-                if (!bosPassed && !sweepSetup && !retestPassed) reasonKey = 'sem_BOS_e_retest';
-                else if (!bosPassed && !sweepSetup) reasonKey = 'sem_BOS';
-                else if (!retestPassed) reasonKey = 'sem_retest';
-                else if (sweepSetup && !bosPassed) reasonKey = 'sweep';
-                else reasonKey = 'passou_filtros';
-            } else if (!blockReason && !primaryDirection) {
-                reasonKey = 'score_neutro';
-            }
-            blockStats[reasonKey] = (blockStats[reasonKey] || 0) + 1;
-
-            if (state.divergence1H) {
-                if ((state.divergence1H.type === 'BULLISH_REGULAR' && primaryDirection === 'LONG') ||
-                    (state.divergence1H.type === 'BEARISH_REGULAR' && primaryDirection === 'SHORT')) {
-                    score += 8;
-                }
-            }
-
-            if (structureOk && !blockReason) {
-                let stop, tp1, tp2, tp3;
-                const volatilityAtr = state.atr_5M * (1 + state.volatilityFactor * 0.5);
-
-                const stopMultiplier = primaryDirection === 'LONG' ? stopLong : stopShort;
-                const tp1Multiplier = primaryDirection === 'LONG' ? tp1Long : tp1Short;
-
-                if (primaryDirection === 'LONG') {
-                    const recentLows = state.swingLows.slice(-3);
-                    const structLevel = (recentLows.length ? Math.min(...recentLows) : state.price * 0.98) - (atr * 0.3);
-                    const atrStop = state.price - atr * stopMultiplier;
-                    stop = (recentLows.length && (state.price - structLevel) <= atr * 2.5) ? structLevel : atrStop;
-                    tp1 = state.price + (volatilityAtr * tp1Multiplier);
-                    tp2 = state.price + (volatilityAtr * tp2Dist);
-                    tp3 = state.price + (volatilityAtr * 7.0);
-                } else {
-                    const recentHighs = state.swingHighs.slice(-3);
-                    const structLevel = (recentHighs.length ? Math.max(...recentHighs) : state.price * 1.02) + (atr * 0.3);
-                    const atrStopShort = state.price + atr * stopMultiplier;
-                    stop = (recentHighs.length && (structLevel - state.price) <= atr * 2.5) ? structLevel : atrStopShort;
-                    tp1 = state.price - (volatilityAtr * tp1Multiplier);
-                    tp2 = state.price - (volatilityAtr * tp2Dist);
-                    tp3 = state.price - (volatilityAtr * 7.0);
-                }
-
-                let rrPonderado;
-                if (primaryDirection === 'LONG') {
-                    const ganhoPonderado = (tp1 - state.price) * 0.5 + (tp2 - state.price) * 0.3 + (tp3 - state.price) * 0.2;
-                    rrPonderado = (state.price - stop) > 0 ? ganhoPonderado / (state.price - stop) : 0;
-                } else {
-                    const ganhoPonderado = (state.price - tp1) * 0.5 + (state.price - tp2) * 0.3 + (state.price - tp3) * 0.2;
-                    rrPonderado = (stop - state.price) > 0 ? ganhoPonderado / (stop - state.price) : 0;
-                }
-
-                // R:R adaptativo (se stop < 0.8 ATR, reduz exigência)
-                const stopDistAtr = (primaryDirection === 'LONG') ? (state.price - stop) / state.atr_5M : (stop - state.price) / state.atr_5M;
-                const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : rrMin;
-                if (rrPonderado < rrMinEffective) continue;
-
-                const totalTrades = winCount + lossCount;
-                const winRate = totalTrades > 0 ? winCount / totalTrades : 0.5;
-                const kellyPct = KellyPositionSize(winRate, rrPonderado);
-                const riskFraction = Math.min(kellyPct, 0.05);
-                const stopDistancePct = primaryDirection === 'LONG' ? (state.price - stop) / state.price : (stop - state.price) / state.price;
-                const positionSizeUSD = (riskFraction * equity) / stopDistancePct;
-                const sizeMultiplier = Math.min(positionSizeUSD / equity, 1.0);
-
-                position = {
-                    type: primaryDirection,
-                    entryPrice: state.price,
-                    stop: stop,
-                    tp1: tp1,
-                    tp2: tp2,
-                    trailingStop: stop,
-                    partialTaken: false,
-                    tp2Taken: false,
-                    sizeRemaining: sizeMultiplier,
-                    partialPnlUsd: 0,
-                    partialPnlPct: 0,
-                    maxProfitPrice: state.price,
-                    entryTime: candle.time
-                };
-            }
+        // Registra bloqueios para diagnóstico
+        if (!position && blockReason) {
+            blockStats[blockReason] = (blockStats[blockReason] || 0) + 1;
         }
     }
 
@@ -1291,7 +1283,7 @@ export async function runBacktest(symbol = 'BTCUSDT', days = 30, options = {}) {
 }
 
 // ============================================================
-// GERAR RELATÓRIO (mantido igual, apenas referência)
+// GERAR RELATÓRIO (idêntico, apenas atualizado o nome)
 // ============================================================
 function generateReport(trades, summary, symbol, days, params) {
     if (!trades || trades.length === 0) {
@@ -1380,7 +1372,7 @@ function generateReport(trades, summary, symbol, days, params) {
     const reportHTML = `
     <!DOCTYPE html>
     <html>
-    <head><meta charset="UTF-8"><title>Relatório de Performance - ${symbol}</title>
+    <head><meta charset="UTF-8"><title>Relatório de Performance Scalp - ${symbol}</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f5f6fa; padding: 30px; color: #2d3436; }
         .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
@@ -1408,11 +1400,11 @@ function generateReport(trades, summary, symbol, days, params) {
     </head>
     <body>
     <div class="container">
-        <h1>📊 Relatório de Performance — ${symbol}</h1>
+        <h1>📊 Relatório de Performance Scalp — ${symbol}</h1>
         <p><strong>Período:</strong> Últimos ${days} dias (${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('pt-BR')} a ${new Date().toLocaleDateString('pt-BR')})</p>
         <p><strong>Trades fechados:</strong> ${closed.length}</p>
 
-        <h2>⚙️ Parâmetros do Backtest</h2>
+        <h2>⚙️ Parâmetros do Backtest (Scalp)</h2>
         <div class="params-grid">
             <div class="item"><div class="label">Score mínimo LONG</div><div class="value">${p.scoreMin ?? '--'}</div></div>
             <div class="item"><div class="label">Score máximo SHORT</div><div class="value">${p.scoreMaxShort ?? '--'}</div></div>
@@ -1535,7 +1527,7 @@ function generateReport(trades, summary, symbol, days, params) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Relatorio_${symbol}_${new Date().toISOString().slice(0,10)}.html`;
+    a.download = `Relatorio_Scalp_${symbol}_${new Date().toISOString().slice(0,10)}.html`;
     a.click();
     URL.revokeObjectURL(url);
 
@@ -1561,14 +1553,15 @@ function generateReport(trades, summary, symbol, days, params) {
     const csvUrl = URL.createObjectURL(csvBlob);
     const aCsv = document.createElement('a');
     aCsv.href = csvUrl;
-    aCsv.download = `Trades_${symbol}_${new Date().toISOString().slice(0,10)}.csv`;
+    aCsv.download = `Trades_Scalp_${symbol}_${new Date().toISOString().slice(0,10)}.csv`;
     aCsv.click();
     URL.revokeObjectURL(csvUrl);
 
     alert(`Relatório HTML e CSV baixados com sucesso!\nTrades: ${closed.length}`);
 }
+
 // ============================================================
-// UI – EVENT LISTENERS (ajustados para os novos parâmetros)
+// UI – EVENT LISTENERS (ajustado para os novos IDs)
 // ============================================================
 const getParam = (id) => {
     const el = document.getElementById(id);
@@ -1583,7 +1576,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     status.textContent = '⏳ Preparando...';
 
     const symbol = document.getElementById('symbolSelect').value;
-    let days = parseInt(document.getElementById('days').value) || 30;
+    let days = parseInt(document.getElementById('days').value) || 999;
     days = Math.min(days, 1000);
     document.getElementById('days').value = days;
 
@@ -1598,8 +1591,8 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         requireBOS: getParam('requireBOS'),
         requireRetest: getParam('requireRetest'),
         requireSweep: getParam('requireSweep'),
-        zFundingMax: getParam('zFundingMax') || 2.0,
-        zOiMax: getParam('zOiMax') || 2.0,
+        zFundingMax: 2.0,
+        zOiMax: 2.0,
         maxHoldHours: getParam('maxHoldHours'),
         htfBullishVelas: getParam('htfBullishVelas'),
         diDiffMinLong: getParam('diDiffMinLong'),
@@ -1615,8 +1608,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         trailShort: getParam('trailShort'),
         tp1Pct: getParam('tp1Pct') / 100,
         tp2Pct: getParam('tp2Pct') / 100,
-        runnerPct: getParam('runnerPct') / 100,
-        dojiThreshold: getParam('dojiThreshold') || 0.15
+        runnerPct: getParam('runnerPct') / 100
     };
 
     try {
@@ -1741,7 +1733,7 @@ document.getElementById('reportBtn').addEventListener('click', () => {
     }
     const { trades, summary } = lastResult;
     const symbol = document.getElementById('symbolSelect').value;
-    const days = parseInt(document.getElementById('days').value) || 30;
+    const days = parseInt(document.getElementById('days').value) || 999;
     generateReport(trades, summary, symbol, days, lastParams);
 });
 
@@ -1758,7 +1750,7 @@ document.getElementById('liveModeBtn').addEventListener('click', async () => {
     btn.textContent = '🟢 Live Ativo';
     btn.className = 'btn-io live active';
     document.getElementById('status').textContent = '🔄 Modo Live ativo – atualizando a cada 15 min...';
-    
+
     const updateLive = async () => {
         const symbol = document.getElementById('symbolSelect').value;
         try {
@@ -1777,16 +1769,16 @@ document.getElementById('liveModeBtn').addEventListener('click', async () => {
             document.getElementById('status').textContent = `❌ Erro na atualização: ${e.message}`;
         }
     };
-    
+
     await updateLive();
     liveInterval = setInterval(updateLive, 15 * 60 * 1000);
 });
 
 // ============================================================
-// ROBÔ DE SINAIS (SCALP 5M/1H)
+// ROBÔ DE SINAIS (adaptado para Scalp)
 // ============================================================
 const ROBOT_ASSETS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
-const SIGNAL_COOLDOWN_MS = 300000; // cooldown fixo, mas pode ser dinâmico (usamos 5min base)
+const SIGNAL_COOLDOWN_MS = 300000;
 let signalRobotInterval = null;
 let isRobotRunning = false;
 let lastSignalTime = {};
@@ -1819,9 +1811,6 @@ async function sendSignalAlert(symbol, signal) {
     const rr1 = dir === 'LONG' ? (signal.tp1 - signal.entryPrice) / (signal.entryPrice - signal.stop) : (signal.entryPrice - signal.tp1) / (signal.stop - signal.entryPrice);
     const rr2 = dir === 'LONG' ? (signal.tp2 - signal.entryPrice) / (signal.entryPrice - signal.stop) : (signal.entryPrice - signal.tp2) / (signal.stop - signal.entryPrice);
     msg += `Alvos:\n  TP1: $${signal.tp1.toFixed(2)} (R:R ${rr1.toFixed(1)})\n  TP2: $${signal.tp2.toFixed(2)} (R:R ${rr2.toFixed(1)})\n`;
-    if (signal.trailingStop) {
-        msg += `Trailing Stop sugerido: $${signal.trailingStop.toFixed(2)}\n`;
-    }
     msg += `Estrutura: ${signal.rationale}\n⏰ ${new Date().toLocaleString('pt-BR')}`;
     const ok = await sendTelegramAlert(msg);
     if (ok) {
@@ -1829,8 +1818,7 @@ async function sendSignalAlert(symbol, signal) {
         if (alertLog.length > 50) alertLog.shift();
         localStorage.setItem('alertLog', JSON.stringify(alertLog));
         updateRobotLog(`✅ Sinal ${dir} enviado para ${symbol} (Score: ${signal.score})`);
-        
-        // Armazena no JSONBin
+
         await storeSignalToCloud({
             symbol,
             direction: dir,
@@ -1864,8 +1852,8 @@ function updateRobotLog(message) {
 async function checkSignal(symbol) {
     try {
         const now = Date.now();
-        const startTime5m = now - 200 * 5 * 60 * 1000; // 200 velas 5m
-        const startTime1h = now - 200 * 60 * 60 * 1000; // 200 velas 1h
+        const startTime5m = now - 200 * 5 * 60 * 1000;   // 200 velas de 5min
+        const startTime1h = now - 200 * 60 * 60 * 1000;   // 200 velas de 1h
         const [candles5m, candles1h, fundingHist, oiHist, mvrvHist] = await Promise.all([
             fetchHistoricalCandlesPaged(symbol, '5m', startTime5m, now, 200),
             fetchHistoricalCandlesPaged(symbol, '1h', startTime1h, now, 200),
@@ -1875,7 +1863,7 @@ async function checkSignal(symbol) {
         ]);
 
         if (candles5m.length < 50) {
-            console.warn(`[Robot] Dados insuficientes para ${symbol}`);
+            console.warn(`[Robot Scalp] Dados insuficientes para ${symbol}`);
             return null;
         }
 
@@ -1915,7 +1903,7 @@ async function checkSignal(symbol) {
         state.candles5M = candles5m.slice(-200);
 
         const updateIndicators = (candles, currentTime, bullishVelas, bearishVelas) => {
-            if (candles.length < 10) return;
+            if (candles.length < 14) return;
             const closes = candles.map(c => c.close);
             state.ema50_5M = calcEMA(closes, 50).slice(-1)[0] || closes[closes.length - 1];
             state.atr_5M = calculateATR(candles, 10);
@@ -2014,7 +2002,7 @@ async function checkSignal(symbol) {
             const relevant5M = state.candles5M.filter(c => c.time <= currentTime).slice(-50);
             const relevant1H = state.candles1H.filter(c => c.time <= currentTime).slice(-50);
             if (relevant5M.length < 20 || relevant1H.length < 10) return { alinhado: false, score: 0, directions: [], alinhadoParcial: false };
-            
+
             const getDir = (candles) => {
                 if (candles.length < 20) return 'NEUTRO';
                 const closes = candles.map(c => c.close);
@@ -2060,33 +2048,32 @@ async function checkSignal(symbol) {
         state.mtfConfluence = getMTFAlignmentAtTime(lastCandle.time);
 
         const params = {
-            scoreMin: parseFloat(document.getElementById('scoreMin').value) || 51,
-            scoreMaxShort: parseFloat(document.getElementById('scoreMaxShort').value) || 49,
-            adxMin: parseFloat(document.getElementById('adxMin').value) || 12,
-            rrMin: parseFloat(document.getElementById('rrMin').value) || 1.0,
-            retestDistPct: parseFloat(document.getElementById('retestDist').value) || 2.5,
+            scoreMin: parseFloat(document.getElementById('scoreMin').value),
+            scoreMaxShort: parseFloat(document.getElementById('scoreMaxShort').value),
+            adxMin: parseFloat(document.getElementById('adxMin').value),
+            rrMin: parseFloat(document.getElementById('rrMin').value),
+            retestDistPct: parseFloat(document.getElementById('retestDist').value),
             emaRetest: document.getElementById('emaRetest').checked,
             requireMTF: document.getElementById('requireMTF').checked,
             requireBOS: document.getElementById('requireBOS').checked,
             requireRetest: document.getElementById('requireRetest').checked,
             requireSweep: document.getElementById('requireSweep').checked,
-            maxHoldHours: parseFloat(document.getElementById('maxHoldHours').value) || 72,
-            htfBullishVelas: parseInt(document.getElementById('htfBullishVelas').value) || 2,
-            diDiffMinLong: parseFloat(document.getElementById('diDiffMinLong').value) || 0,
-            mvrvDropPercent: parseFloat(document.getElementById('mvrvDropPercent').value) / 100 || 0.25,
-            htfBearishVelas: parseInt(document.getElementById('htfBearishVelas').value) || 2,
-            diDiffMinShort: parseFloat(document.getElementById('diDiffMinShort').value) || 8,
-            stopLong: parseFloat(document.getElementById('stopLong').value) || 0.8,
-            stopShort: parseFloat(document.getElementById('stopShort').value) || 0.8,
-            tp1Long: parseFloat(document.getElementById('tp1Long').value) || 1.5,
-            tp1Short: parseFloat(document.getElementById('tp1Short').value) || 1.5,
-            tp2Dist: parseFloat(document.getElementById('tp2Dist').value) || 2.5,
-            trailLong: parseFloat(document.getElementById('trailLong').value) || 0.5,
-            trailShort: parseFloat(document.getElementById('trailShort').value) || 0.5,
-            tp1Pct: parseFloat(document.getElementById('tp1Pct').value) / 100 || 0.7,
-            tp2Pct: parseFloat(document.getElementById('tp2Pct').value) / 100 || 0.0,
-            runnerPct: parseFloat(document.getElementById('runnerPct').value) / 100 || 0.3,
-            dojiThreshold: parseFloat(document.getElementById('dojiThreshold').value) || 0.15
+            maxHoldHours: parseFloat(document.getElementById('maxHoldHours').value),
+            htfBullishVelas: parseInt(document.getElementById('htfBullishVelas').value),
+            diDiffMinLong: parseFloat(document.getElementById('diDiffMinLong').value),
+            mvrvDropPercent: parseFloat(document.getElementById('mvrvDropPercent').value) / 100,
+            htfBearishVelas: parseInt(document.getElementById('htfBearishVelas').value),
+            diDiffMinShort: parseFloat(document.getElementById('diDiffMinShort').value),
+            stopLong: parseFloat(document.getElementById('stopLong').value),
+            stopShort: parseFloat(document.getElementById('stopShort').value),
+            tp1Long: parseFloat(document.getElementById('tp1Long').value),
+            tp1Short: parseFloat(document.getElementById('tp1Short').value),
+            tp2Dist: parseFloat(document.getElementById('tp2Dist').value),
+            trailLong: parseFloat(document.getElementById('trailLong').value),
+            trailShort: parseFloat(document.getElementById('trailShort').value),
+            tp1Pct: parseFloat(document.getElementById('tp1Pct').value) / 100,
+            tp2Pct: parseFloat(document.getElementById('tp2Pct').value) / 100,
+            runnerPct: parseFloat(document.getElementById('runnerPct').value) / 100
         };
 
         updateIndicators(state.candles5M, lastCandle.time, params.htfBullishVelas, params.htfBearishVelas);
@@ -2121,8 +2108,11 @@ async function checkSignal(symbol) {
         let score = scoreData.score;
         blockReason = scoreData.blockReason;
 
-        if (direction === 'LONG' && score < params.scoreMin) blockReason = `Score ${score} < ${params.scoreMin}`;
-        else if (direction === 'SHORT' && score > params.scoreMaxShort) blockReason = `Score ${score} > ${params.scoreMaxShort}`;
+        if (direction === 'LONG' && score < params.scoreMin) {
+            blockReason = `Score ${score} < ${params.scoreMin}`;
+        } else if (direction === 'SHORT' && score > params.scoreMaxShort) {
+            blockReason = `Score ${score} > ${params.scoreMaxShort}`;
+        }
 
         if (direction === 'SHORT' && state.mvrvHistory.length > 0 && !blockReason) {
             const mvrvPeak90d = Math.max(...state.mvrvHistory);
@@ -2150,26 +2140,18 @@ async function checkSignal(symbol) {
             }
         }
 
-        // Filtro de mercado lateral (ADX + Bandwidth)
-        const closes = state.candles5M.slice(-20).map(c => c.close);
-        if (closes.length >= 20) {
-            const sma = closes.reduce((a,b) => a+b, 0) / 20;
-            const variance = closes.reduce((s, v) => s + (v-sma)**2, 0) / 20;
-            const stdBB = Math.sqrt(variance);
-            const bandwidth = (2 * stdBB) / sma;
-            state.bandwidthHistory.push(bandwidth);
-            if (state.bandwidthHistory.length >= 10) {
-                const avgBW = state.bandwidthHistory.slice(-10).reduce((a,b) => a+b, 0) / 10;
-                const bwPass = bandwidth >= avgBW * 0.25;
-                const rangePass = (adxVal >= 15) || (bandwidth >= avgBW * 0.35);
-                if (!bwPass || !rangePass) {
-                    blockReason = 'Mercado lateral (ADX/BW)';
-                }
-            }
+        // VWAP
+        if (direction === 'LONG' && state.price < state.vwap && !blockReason) {
+            blockReason = 'Preço abaixo do VWAP';
+        } else if (direction === 'SHORT' && state.price > state.vwap && !blockReason) {
+            blockReason = 'Preço acima do VWAP';
         }
 
-        // Funding e OI Z-score (já aplicados no backtest, mas replicamos aqui)
-        // ... (código de funding e oi pode ser adicionado se necessário, mas já foi aplicado no loop)
+        // Derivativos
+        if (!blockReason) {
+            const derivCheck = checkDerivativesFilter(state.fundingRate, state.oiDelta);
+            if (!derivCheck.allow) blockReason = derivCheck.reason;
+        }
 
         // SMC
         const recentHighs = state.swingHighs.slice(-3);
@@ -2232,7 +2214,7 @@ async function checkSignal(symbol) {
         }
 
         if (!blockReason && smcSetup) {
-            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a - b);
+            const volumes = state.candles5M.slice(-14).map(c => c.volume).sort((a,b) => a-b);
             const p25 = volumes[Math.floor(0.25 * volumes.length)] || 0;
             const avgVol = state.candles5M.slice(-14).reduce((s, c) => s + c.volume, 0) / 14;
             const volumeOk = state.candles5M[state.candles5M.length - 1].volume >= p25 &&
@@ -2245,12 +2227,12 @@ async function checkSignal(symbol) {
 
         const body = Math.abs(lastCandle.close - lastCandle.open);
         const range = lastCandle.high - lastCandle.low;
-        if (range > 0 && body / range < params.dojiThreshold && !blockReason) {
+        if (range > 0 && body / range < 0.15 && !blockReason) {
             blockReason = 'Corpo fraco (doji)';
         }
 
         if (blockReason) {
-            console.log(`[Robot] ${symbol} bloqueado: ${blockReason}`);
+            console.log(`[Robot Scalp] ${symbol} bloqueado: ${blockReason}`);
             return null;
         }
 
@@ -2273,17 +2255,18 @@ async function checkSignal(symbol) {
             tp2 = state.price - volatilityAtr * params.tp2Dist;
         }
 
+        // R:R adaptativo
+        const stopDistAtr = (direction === 'LONG') ? (state.price - stop) / atr : (stop - state.price) / atr;
+        const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : params.rrMin;
+
         let rr;
         if (direction === 'LONG') {
             rr = (tp1 - state.price) / (state.price - stop);
         } else {
             rr = (state.price - tp1) / (stop - state.price);
         }
-        // R:R adaptativo
-        const stopDistAtr = (direction === 'LONG') ? (state.price - stop) / state.atr_5M : (stop - state.price) / state.atr_5M;
-        const rrMinEffective = (stopDistAtr < 0.8) ? 0.7 : params.rrMin;
         if (rr < rrMinEffective) {
-            console.log(`[Robot] ${symbol} R:R ${rr.toFixed(2)} < ${rrMinEffective}`);
+            console.log(`[Robot Scalp] ${symbol} R:R ${rr.toFixed(2)} < ${rrMinEffective}`);
             return null;
         }
 
@@ -2293,28 +2276,19 @@ async function checkSignal(symbol) {
         else if (params.emaRetest && retestConfirmed) rationale = 'EMA Retest';
         else rationale = 'Estrutura SMC';
 
-        // Trailing stop sugerido
-        let trailingStop = null;
-        if (direction === 'LONG' && params.trailLong > 0) {
-            trailingStop = state.price - atr * params.trailLong;
-        } else if (direction === 'SHORT' && params.trailShort > 0) {
-            trailingStop = state.price + atr * params.trailShort;
-        }
-
         return {
             direction,
             entryPrice: state.price,
             stop,
             tp1,
             tp2,
-            trailingStop,
             rr,
             score,
             rationale
         };
 
     } catch (e) {
-        console.error(`[Robot] Erro ao verificar ${symbol}:`, e);
+        console.error(`[Robot Scalp] Erro ao verificar ${symbol}:`, e);
         return null;
     }
 }
@@ -2322,7 +2296,7 @@ async function checkSignal(symbol) {
 async function runRobotCycle() {
     if (!isRobotRunning) return;
 
-    updateRobotLog('🔍 Verificando sinais scalp...');
+    updateRobotLog('🔍 Verificando sinais Scalp...');
     for (const symbol of ROBOT_ASSETS) {
         const now = Date.now();
         const lastTime = lastSignalTime[symbol] || 0;
@@ -2344,10 +2318,10 @@ async function startRobot() {
     if (isRobotRunning) return;
     isRobotRunning = true;
     document.getElementById('robotLed').className = 'led on';
-    document.getElementById('robotStatusText').textContent = 'Robô ativo (scalp)';
+    document.getElementById('robotStatusText').textContent = 'Robô ativo (Scalp)';
     document.getElementById('robotToggleBtn').textContent = '⏹️ Parar Robô';
     document.getElementById('robotToggleBtn').classList.add('active');
-    updateRobotLog('🚀 Robô scalp iniciado.');
+    updateRobotLog('🚀 Robô Scalp iniciado.');
     await runRobotCycle();
     signalRobotInterval = setInterval(runRobotCycle, 15 * 60 * 1000);
 }
@@ -2361,9 +2335,9 @@ function stopRobot() {
     }
     document.getElementById('robotLed').className = 'led off';
     document.getElementById('robotStatusText').textContent = 'Robô parado';
-    document.getElementById('robotToggleBtn').textContent = '🤖 Iniciar Robô de Sinais (scalp)';
+    document.getElementById('robotToggleBtn').textContent = '🤖 Iniciar Robô de Sinais (Scalp)';
     document.getElementById('robotToggleBtn').classList.remove('active');
-    updateRobotLog('⏹️ Robô parado.');
+    updateRobotLog('⏹️ Robô Scalp parado.');
 }
 
 document.getElementById('robotToggleBtn').addEventListener('click', () => {
@@ -2407,22 +2381,22 @@ setInterval(() => {
 })();
 
 // ============================================================
-// TESTE DO TELEGRAM
+// TESTE DO TELEGRAM (idêntico)
 // ============================================================
 async function testTelegram() {
     const led = document.getElementById('telegramTestLed');
     const status = document.getElementById('telegramTestStatus');
     const log = document.getElementById('telegramTestLog');
-    
+
     led.style.background = '#ffd60a';
     status.textContent = 'Enviando...';
     log.textContent = '⏳ Aguarde...';
-    
+
     try {
         const TELEGRAM_TOKEN = '8670184440:AAFBfhFFTMnUWsgIFyRh0huBYbL-Q_vhT5k';
         const TELEGRAM_CHAT_ID = '1137196768';
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-        const message = `🧪 Teste de conexão do Telegram (SCALP)\n⏰ ${new Date().toLocaleString('pt-BR')}\n✅ Mensagem enviada com sucesso!`;
+        const message = `🧪 Teste de conexão do Telegram (Scalp)\n⏰ ${new Date().toLocaleString('pt-BR')}\n✅ Mensagem enviada com sucesso!`;
         const resp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2447,7 +2421,7 @@ async function testTelegram() {
 document.getElementById('telegramTestBtn').addEventListener('click', testTelegram);
 
 // ============================================================
-// ARMAZENAMENTO EM NUVEM (JSONBin) – mantido
+// ARMAZENAMENTO EM NUVEM (JSONBin) – IDÊNTICO
 // ============================================================
 const JSONBIN_MASTER_KEY = '$2a$10$mbH27dVmnT4JyX.5MAbxM.KknNujEyPzfTW1Z2LnkK7Ga6rXqUE4C';
 const JSONBIN_BIN_ID = '6a4c4be6da38895dfe3841c9';
@@ -2514,11 +2488,11 @@ function saveParamsLocal() {
             params[el.id] = el.value;
         }
     });
-    localStorage.setItem('backtestParams', JSON.stringify(params));
+    localStorage.setItem('backtestParamsScalp', JSON.stringify(params));
 }
 
 function loadParamsLocal() {
-    const saved = localStorage.getItem('backtestParams');
+    const saved = localStorage.getItem('backtestParamsScalp');
     if (!saved) return;
     try {
         const params = JSON.parse(saved);
@@ -2549,7 +2523,7 @@ async function syncParamsToCloud() {
         if (!getResp.ok) throw new Error(`HTTP ${getResp.status}`);
         const current = await getResp.json();
         const record = current.record || {};
-        record.params = params;
+        record.paramsScalp = params;
         const putResp = await fetch(JSONBIN_URL, {
             method: 'PUT',
             headers: {
@@ -2559,9 +2533,9 @@ async function syncParamsToCloud() {
             body: JSON.stringify(record)
         });
         if (!putResp.ok) throw new Error(`HTTP ${putResp.status}`);
-        console.log('✅ Parâmetros sincronizados com a nuvem');
+        console.log('✅ Parâmetros Scalp sincronizados com a nuvem');
     } catch (e) {
-        console.warn('❌ Falha ao sincronizar parâmetros:', e.message);
+        console.warn('❌ Falha ao sincronizar parâmetros Scalp:', e.message);
     }
 }
 
@@ -2572,16 +2546,16 @@ async function loadParamsFromCloud() {
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-        const params = data?.record?.params || {};
+        const params = data?.record?.paramsScalp || {};
         document.querySelectorAll('.params-grid input, .params-grid select').forEach(el => {
             if (el.id && params[el.id] !== undefined) {
                 if (el.type === 'checkbox') el.checked = params[el.id];
                 else el.value = params[el.id];
             }
         });
-        console.log('✅ Parâmetros carregados da nuvem');
+        console.log('✅ Parâmetros Scalp carregados da nuvem');
     } catch (e) {
-        console.warn('⚠️ Usando parâmetros locais');
+        console.warn('⚠️ Usando parâmetros locais Scalp');
         loadParamsLocal();
     }
 }
@@ -2598,4 +2572,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('runBtn').addEventListener('click', syncParamsToCloud);
 });
 
-console.log('✅ Módulo backtest_engine.js (SCALP) carregado com sucesso.');
+console.log('✅ Módulo backtest_engine.js (Scalp v4.0) carregado com sucesso.');
