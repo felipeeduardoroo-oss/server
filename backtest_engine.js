@@ -2562,16 +2562,43 @@ async function loadParamsFromCloud() {
 
 // Inicialização: carrega parâmetros da nuvem e configura eventos de salvamento
 document.addEventListener('DOMContentLoaded', async () => {
+    // Tenta carregar da nuvem, mas se falhar, usa localStorage (fallback silencioso)
     try {
         await loadParamsFromCloud();
-    } catch(e) {
+    } catch (e) {
+        console.log('ℹ️ Falha ao carregar da nuvem, usando localStorage');
+        loadParamsLocal();
+    }
+
+    // Configura eventos de salvamento (local + nuvem, com fallback)
     document.querySelectorAll('.params-grid input, .params-grid select').forEach(el => {
-        el.addEventListener('change', syncParamsToCloud);
-        el.addEventListener('input', syncParamsToCloud);
-        el.addEventListener('change', saveParamsLocal);
-        el.addEventListener('input', saveParamsLocal);
+        el.addEventListener('change', () => {
+            saveParamsLocal();
+            try {
+                syncParamsToCloud();
+            } catch (e) {
+                // ignora erro de sincronização com nuvem
+            }
+        });
+        el.addEventListener('input', () => {
+            saveParamsLocal();
+            try {
+                syncParamsToCloud();
+            } catch (e) {
+                // ignora erro de sincronização com nuvem
+            }
+        });
     });
-    document.getElementById('runBtn').addEventListener('click', syncParamsToCloud);
+
+    // Botão executar também sincroniza (com fallback)
+    document.getElementById('runBtn').addEventListener('click', () => {
+        saveParamsLocal();
+        try {
+            syncParamsToCloud();
+        } catch (e) {
+            // ignora erro
+        }
+    });
 });
 
-console.log('✅ Módulo backtest_engine.js (Scalp v4.0) carregado com sucesso.');
+console.log('✅ Backtest Engine v4.0 (Scalp) – carregado com fallback local.');
