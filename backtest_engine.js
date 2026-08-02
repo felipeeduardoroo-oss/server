@@ -1563,10 +1563,19 @@ function generateReport(trades, summary, symbol, days, params) {
 // ============================================================
 // UI – EVENT LISTENERS (ajustado para os novos IDs)
 // ============================================================
+// ===== FUNÇÃO GETPARAM CORRIGIDA =====
 const getParam = (id) => {
     const el = document.getElementById(id);
-    if (el.type === 'checkbox') return el.checked;
-    return parseFloat(el.value);
+    if (!el) {
+        console.warn(`⚠️ Elemento com id "${id}" não encontrado. Usando valor padrão.`);
+        // Retorna 0 para números, false para checkbox (mas aqui não sabemos o tipo, então 0)
+        return 0;
+    }
+    if (el.type === 'checkbox') {
+        return el.checked;
+    }
+    const val = parseFloat(el.value);
+    return isNaN(val) ? 0 : val;
 };
 
 document.getElementById('runBtn').addEventListener('click', async () => {
@@ -2562,7 +2571,7 @@ async function loadParamsFromCloud() {
 
 // Inicialização: carrega parâmetros da nuvem e configura eventos de salvamento
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadParamsFromCloud();
+    await loadParamsFromCloud();;
     document.querySelectorAll('.params-grid input, .params-grid select').forEach(el => {
         el.addEventListener('change', syncParamsToCloud);
         el.addEventListener('input', syncParamsToCloud);
